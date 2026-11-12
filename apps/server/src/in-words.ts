@@ -51,7 +51,13 @@ export function runListingsInWords(listings: RunListing[]): string {
     const latest = listing.latest === null
       ? 'no scenes yet'
       : `latest scene ${listing.latest.number}, "${listing.latest.title}" (${listing.latest.whenTyped})`;
-    return `- ${listing.run.slug}: "${listing.run.title}", ${listing.run.status}; ${plural(listing.standingScenes, 'scene', 'scenes')}, ${latest}; ${plural(listing.openThreads, 'open thread', 'open threads')}; ${plural(listing.waitingCollisions, 'collision waiting', 'collisions waiting')}.`;
+    // The setting and the register are said whole, never trimmed: a briefing that had to cut a
+    // long register points the chat here for the rest of it.
+    return [
+      `- ${listing.run.slug}: "${listing.run.title}", ${listing.run.status}; ${plural(listing.standingScenes, 'scene', 'scenes')}, ${latest}; ${plural(listing.openThreads, 'open thread', 'open threads')}; ${plural(listing.waitingCollisions, 'collision waiting', 'collisions waiting')}.`,
+      listing.run.setting === '' ? null : `  Setting: ${listing.run.setting}`,
+      listing.run.register === '' ? null : `  Register: ${listing.run.register}`,
+    ].filter((line): line is string => line !== null).join('\n');
   }).join('\n');
 }
 
@@ -127,6 +133,10 @@ export function sceneInFullInWords(inFull: SceneInFull, names: NamesInTheRun): s
   if (inFull.rulings.length > 0) lines.push('Rulings given:', bulletList(inFull.rulings.map((ruling) => `Ruling ${ruling.number}: ${ruling.text}`), ''));
   if (inFull.threadsOpened.length > 0) lines.push('Threads opened:', bulletList(inFull.threadsOpened.map((thread) => thread.text), ''));
   if (inFull.threadsClosed.length > 0) lines.push('Threads closed:', bulletList(inFull.threadsClosed.map((thread) => `${thread.text} (${thread.resolution})`), ''));
+  // The briefing says read_scene fetches the journeys it left out, so they are said here.
+  if (inFull.legs.length > 0) {
+    lines.push('Journeys:', bulletList(inFull.legs.map((leg) => `From ${leg.fromPlace} to ${leg.toPlace}: ${leg.duration}${leg.note === '' ? '' : ` (${leg.note})`}`), ''));
+  }
   return lines.filter((line): line is string => line !== null).join('\n');
 }
 

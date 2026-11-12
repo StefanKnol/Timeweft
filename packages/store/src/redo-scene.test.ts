@@ -121,3 +121,37 @@ test('only the newest standing scene can be redone, and a number with no scene i
     (error) => error instanceof Refusal && /Only the newest scene can be redone/.test(error.message));
   await assert.rejects(store.redoScene(redoInput({ run: slug, number: 9 })), Refusal);
 });
+
+test('a redo un-reaches only the waypoints its own save reached, not ones an import dated to it', async () => {
+  const slug = 'redo-imported-waypoint';
+  await store.importRun({
+    slug, title: 'The Ford', setting: '', status: 'binding', register: '', clocks: [],
+    scenes: [{ number: 1, title: 'One', starred: false, whenTyped: 'day one', place: null, summary: 'x', record: '', steer: '', situationAfter: '', readings: [] }],
+    entries: [], rulings: [], threads: [], legs: [], unplaced: [],
+    waypoints: [{ text: 'The ferry crosses at night.', reached: true }],
+  });
+  const redone = await store.redoScene(redoInput({ run: slug, number: 1 }));
+  const story = await store.snapshotOf(slug, 'story');
+  assert.equal(story.waypoints[0]!.reachedInSceneId, redone.scene.id, 'the import said it was reached as of then, and it still is');
+});
+
+test('a redo revives a struck entry only on its exact name and kind, taking the new pronoun and other names', async () => {
+  const { slug } = await freshRunWithAFirstScene();
+  await store.saveScene(sceneInput({ run: slug, entries: [{ name: 'the toll', kind: 'other', alsoKnownAs: ['the fee'] }] }));
+  const struckId = (await store.snapshotOf(slug, 'author')).entries.find((entry) => entry.name === 'the toll')!.id;
+  const redone = await store.redoScene(redoInput({ run: slug, number: 2, entries: [{ name: 'The Toll', kind: 'other', alsoKnownAs: ['the copper'], pronoun: 'it' }] }));
+  assert.equal(redone.entriesAdded[0]!.id, struckId);
+  assert.equal(redone.entriesAdded[0]!.pronoun, 'it');
+  assert.deepEqual(redone.entriesAdded[0]!.alsoKnownAs, ['the copper']);
+});
+
+test('a struck entry is not revived by another kind, by one of its other names, or in a later scene', async () => {
+  const { slug } = await freshRunWithAFirstScene();
+  await store.saveScene(sceneInput({ run: slug, entries: [{ name: 'the toll', kind: 'other', alsoKnownAs: ['the fee'] }, { name: 'the bridge', kind: 'place' }] }));
+  const author = await store.snapshotOf(slug, 'author');
+  const struckIds = author.entries.filter((entry) => entry.name === 'the toll' || entry.name === 'the bridge').map((entry) => entry.id);
+  const redone = await store.redoScene(redoInput({ run: slug, number: 2, entries: [{ name: 'the toll', kind: 'item' }, { name: 'the fee', kind: 'other' }] }));
+  for (const added of redone.entriesAdded) assert.ok(!struckIds.includes(added.id), `"${added.name}" revived a struck row`);
+  const later = await store.saveScene(sceneInput({ run: slug, entries: [{ name: 'the bridge', kind: 'place' }] }));
+  assert.ok(!struckIds.includes(later.entriesAdded[0]!.id), 'a later scene revived a struck row');
+});

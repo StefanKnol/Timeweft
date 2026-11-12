@@ -8,7 +8,7 @@
 import { ENTRY_KINDS, OPERATION_ROUTE_PREFIX } from '@timeweft/contract';
 import type {
   ClockReading, ClockRecord, CollisionRecord, EntryKind, EntryNoteRecord, EntryRecord, FactRecord,
-  Id, RulingRecord, RunSnapshot, SceneRecord, ThreadRecord, Visibility, WireAnswer,
+  Id, JourneyLegRecord, RulingRecord, RunSnapshot, SceneRecord, ThreadRecord, Visibility, WaypointRecord, WireAnswer,
 } from '@timeweft/contract';
 
 // ---------------------------------------------------------------------------------------------
@@ -53,6 +53,8 @@ export interface SceneEstablished {
   rulings: RulingRecord[];
   threadsOpened: ThreadRecord[];
   threadsClosed: ThreadRecord[];
+  /** The journeys first travelled in this scene. */
+  legs: JourneyLegRecord[];
 }
 
 export function whatASceneEstablished(sceneId: Id, snapshot: RunSnapshot): SceneEstablished {
@@ -63,6 +65,7 @@ export function whatASceneEstablished(sceneId: Id, snapshot: RunSnapshot): Scene
     rulings: snapshot.rulings.filter((ruling) => ruling.sceneId === sceneId),
     threadsOpened: snapshot.threads.filter((thread) => thread.openedInSceneId === sceneId),
     threadsClosed: snapshot.threads.filter((thread) => thread.closedInSceneId === sceneId),
+    legs: snapshot.legs.filter((leg) => leg.sceneId === sceneId),
   };
 }
 
@@ -215,6 +218,64 @@ export function threadsOpenFirst(threads: ThreadRecord[], scenes: SceneRecord[])
 }
 
 // ---------------------------------------------------------------------------------------------
+// Waypoints and journeys
+
+/** A waypoint with the number of the scene that reached it, where a standing scene did. */
+export interface WaypointAsDrawn {
+  waypoint: WaypointRecord;
+  reachedInSceneNumber: number | null;
+}
+
+/**
+ * Waypoints still ahead first, in the order the author set them, then the reached in scene order.
+ * A waypoint is reached only by a standing scene: one a struck take reached is still ahead, since
+ * the story never reached it in any take that is served.
+ */
+export function waypointsAheadFirst(snapshot: RunSnapshot): { ahead: WaypointAsDrawn[]; reached: WaypointAsDrawn[] } {
+  const standingNumbers = new Map(snapshot.scenes.filter((scene) => scene.status === 'standing').map((scene) => [scene.id, scene.number]));
+  const drawn = [...snapshot.waypoints]
+    .sort((first, second) => first.createdAt.localeCompare(second.createdAt))
+    .map((waypoint) => ({
+      waypoint,
+      reachedInSceneNumber: waypoint.reachedInSceneId === null ? null : standingNumbers.get(waypoint.reachedInSceneId) ?? null,
+    }));
+  return {
+    ahead: drawn.filter((item) => item.reachedInSceneNumber === null),
+    reached: drawn
+      .filter((item) => item.reachedInSceneNumber !== null)
+      .sort((first, second) => (first.reachedInSceneNumber ?? 0) - (second.reachedInSceneNumber ?? 0)),
+  };
+}
+
+/** A journey with the number of the scene it was first travelled in, where one is known. */
+export interface JourneyAsDrawn {
+  leg: JourneyLegRecord;
+  sceneNumber: number | null;
+}
+
+/**
+ * Journeys in the order they were travelled: those from before the scenes first, then by scene
+ * number and the order written. A journey from a struck take is kept apart, as a struck take is.
+ */
+export function journeysInSceneOrder(snapshot: RunSnapshot): { travelled: JourneyAsDrawn[]; inStruckTakes: JourneyAsDrawn[] } {
+  const scenesById = new Map(snapshot.scenes.map((scene) => [scene.id, scene]));
+  const drawn = snapshot.legs
+    .map((leg) => {
+      const scene = leg.sceneId === null ? undefined : scenesById.get(leg.sceneId);
+      return { leg, sceneNumber: scene?.number ?? null, struck: scene?.status === 'struck' };
+    })
+    .sort((first, second) => {
+      const byScene = (first.sceneNumber ?? 0) - (second.sceneNumber ?? 0);
+      return byScene !== 0 ? byScene : first.leg.createdAt.localeCompare(second.leg.createdAt);
+    });
+  const asDrawn = ({ leg, sceneNumber }: { leg: JourneyLegRecord; sceneNumber: number | null }) => ({ leg, sceneNumber });
+  return {
+    travelled: drawn.filter((item) => !item.struck).map(asDrawn),
+    inStruckTakes: drawn.filter((item) => item.struck).map(asDrawn),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Collisions
 
 /** A collision with both sides spelled out for the page. */
@@ -342,7 +403,7 @@ export function outcomeOfResponse<Answer>(status: number, bodyText: string): Cal
 // ---------------------------------------------------------------------------------------------
 // Routes
 
-export const RUN_SECTIONS = ['scenes', 'entries', 'rulings', 'threads', 'collisions', 'briefing'] as const;
+export const RUN_SECTIONS = ['scenes', 'entries', 'rulings', 'threads', 'journeys', 'collisions', 'briefing'] as const;
 export type RunSection = (typeof RUN_SECTIONS)[number];
 
 export type Route =

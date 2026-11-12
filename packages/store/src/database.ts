@@ -148,6 +148,8 @@ export interface WaypointsTable {
   run_id: string;
   text: string;
   reached_in_scene_id: string | null;
+  /** The scene whose save reached it, so a redo of that scene un-reaches it. Null where an import dated it. */
+  reached_by_scene_id: Generated<string | null>;
   created_at: CreatedAt;
   written_order: WrittenOrder;
 }

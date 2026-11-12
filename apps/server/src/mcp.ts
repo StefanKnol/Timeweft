@@ -12,7 +12,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
-  OPERATIONS, OPERATION_NAMES, Refusal, type AnswerByOperation, type OperationName, type Store,
+  OPERATIONS, OPERATION_NAMES, Refusal, type AnswerByOperation, type Briefing, type OperationName, type Store,
 } from '@timeweft/contract';
 import { ANSWER_IN_WORDS, NO_NAMES, namesInTheRun, type NamesInTheRun } from './in-words.ts';
 import { runOperation } from './operations.ts';
@@ -31,6 +31,20 @@ async function namesForTheAnswer(store: Store, rawInput: unknown): Promise<Names
   }
 }
 
+/**
+ * Structured content must be an object, and several answers are lists, so every answer is carried
+ * under one key, as the web route carries it. A briefing is the exception: its text is already
+ * the tool's text, and carrying it again here would make the result about twice the budget the
+ * chat asked for, so only its sizes travel.
+ */
+function structuredContentFor(name: OperationName, answer: AnswerByOperation[OperationName]): Record<string, unknown> {
+  if (name === 'resume_run') {
+    const briefing = answer as Briefing;
+    return { bytes: briefing.bytes, budgetBytes: briefing.budgetBytes, sections: briefing.sections };
+  }
+  return { answer };
+}
+
 export async function answerToolCall(store: Store, name: OperationName, rawInput: unknown): Promise<CallToolResult> {
   try {
     const answer = await runOperation(store, name, rawInput, 'story');
@@ -38,9 +52,7 @@ export async function answerToolCall(store: Store, name: OperationName, rawInput
     const sayInWords = ANSWER_IN_WORDS[name] as (answer: AnswerByOperation[OperationName], names: NamesInTheRun) => string;
     return {
       content: [{ type: 'text', text: sayInWords(answer, names) }],
-      // Structured content must be an object, and several answers are lists, so every answer is
-      // carried under one key, as the web route carries it.
-      structuredContent: { answer },
+      structuredContent: structuredContentFor(name, answer),
     };
   } catch (error) {
     if (error instanceof Refusal) return { isError: true, content: [{ type: 'text', text: error.message }] };

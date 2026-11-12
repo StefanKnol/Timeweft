@@ -4,8 +4,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { OPERATIONS, Refusal, type SavedScene, type Store } from '@timeweft/contract';
-import { savedSceneInWords, type NamesInTheRun } from './in-words.ts';
+import { OPERATIONS, Refusal, type SavedScene, type SceneInFull, type Store } from '@timeweft/contract';
+import { runListingsInWords, savedSceneInWords, sceneInFullInWords, type NamesInTheRun } from './in-words.ts';
 import { runOperation } from './operations.ts';
 
 const SCENE_ID = '00000000-0000-4000-8000-000000000001';
@@ -53,4 +53,29 @@ test('an author operation is refused to a story caller before the store is touch
   for (const name of Object.keys(OPERATIONS).filter((candidate) => OPERATIONS[candidate as keyof typeof OPERATIONS].audience === 'author')) {
     await assert.rejects(runOperation(untouchable, name as keyof typeof OPERATIONS, { run: 'the-ford' }, 'story'), Refusal, `${name} was not refused to a story`);
   }
+});
+
+test('a run listing says each run\'s setting and register whole, since a briefing that cut one points here', () => {
+  const longRegister = 'Close third person on the baker, past tense, plain words. '.repeat(400);
+  const text = runListingsInWords([{
+    run: {
+      id: 'run', slug: 'the-ford', title: 'The Ford', setting: 'A ford below the mill, in a wet spring.', status: 'binding',
+      continuesRunId: null, register: longRegister, createdAt: '2026-01-01',
+    },
+    standingScenes: 2, latest: null, openThreads: 0, waitingCollisions: 0,
+  }]);
+  assert.ok(text.includes(longRegister.trim()), 'the register was not carried whole');
+  assert.ok(text.includes('A ford below the mill, in a wet spring.'), 'the setting was not carried');
+});
+
+test('a scene read in full says the journeys first travelled in it', () => {
+  const inFull: SceneInFull = {
+    scene: saved.scene, entriesIntroduced: [], factsEstablished: [], notes: [], rulings: [], threadsOpened: [], threadsClosed: [],
+    legs: [
+      { id: 'l1', runId: 'run', fromPlace: 'the ford', toPlace: 'the mill', duration: 'half a morning', note: 'on foot, carrying flour', sceneId: SCENE_ID, createdAt: '2026-01-01' },
+      { id: 'l2', runId: 'run', fromPlace: 'the mill', toPlace: 'the market', duration: 'an hour', note: '', sceneId: SCENE_ID, createdAt: '2026-01-01' },
+    ],
+  };
+  const text = sceneInFullInWords(inFull, names);
+  assert.match(text, /Journeys:\n- From the ford to the mill: half a morning \(on foot, carrying flour\)\n- From the mill to the market: an hour$/m);
 });

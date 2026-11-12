@@ -214,5 +214,6 @@ export function sceneInFull(snapshot: RunSnapshot, number: number): SceneInFull 
     rulings: snapshot.rulings.filter((ruling) => ruling.sceneId === scene.id).sort((left, right) => left.number - right.number || byCreation(left, right)),
     threadsOpened: snapshot.threads.filter((thread) => thread.openedInSceneId === scene.id).sort(byCreation),
     threadsClosed: snapshot.threads.filter((thread) => thread.closedInSceneId === scene.id).sort(byCreation),
+    legs: snapshot.legs.filter((leg) => leg.sceneId === scene.id).sort(byCreation),
   };
 }

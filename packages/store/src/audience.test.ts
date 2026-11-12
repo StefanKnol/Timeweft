@@ -42,8 +42,13 @@ test('a story snapshot holds nothing author-only, and the author snapshot holds 
   await store.importRun(runWithAHiddenEntry(slug));
   await store.stateFact(stateFactInput({ run: slug, entry: 'Wren the baker', property: 'secret', value: `knows the ${MARKER}`, visibility: 'author-only', note: MARKER }));
   await store.stateFact(stateFactInput({ run: slug, entry: 'Wren the baker', property: 'kin', value: 'sister of the cellar', about: `the ${MARKER} cellar` }));
-  const saved = await store.saveScene(sceneInput({ run: slug, facts: [{ entry: 'Wren the baker', property: 'secret', value: 'nothing' }] }));
-  assert.equal(saved.collisions.length, 1, 'a story still may not replace an author-only author fact');
+  const saved = await store.saveScene(sceneInput({ run: slug, facts: [
+    { entry: 'Wren the baker', property: 'secret', value: 'nothing' },
+    { entry: 'Wren the baker', property: 'kin', value: 'nobody' },
+  ] }));
+  assert.equal(saved.collisions.length, 1, 'only the open author fact collides; the author-only lane is out of a story\'s sight');
+  assert.equal(saved.collisions[0]!.property, 'kin');
+  assert.deepEqual(saved.factsWritten.map((fact) => [fact.property, fact.value, fact.visibility]), [['secret', 'nothing', 'open']]);
 
   const story = await store.snapshotOf(slug, 'story');
   const author = await store.snapshotOf(slug, 'author');

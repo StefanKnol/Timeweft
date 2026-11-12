@@ -201,6 +201,24 @@ export const MIGRATIONS: Migration[] = [
       `create index collisions_by_run on collisions (run_id, state)`,
     ],
   },
+  {
+    number: 2,
+    name: 'one spelling per property, and who reached a waypoint',
+    statements: [
+      // The doors now trim and lower-case a property; rows written before that are brought in line.
+      // Two facts that were held apart only by spelling may now both hold on one property, read as alongside.
+      `update facts set property = lower(regexp_replace(property, '^\\s+|\\s+$', '', 'g'))`,
+      `update collisions set property = lower(regexp_replace(property, '^\\s+|\\s+$', '', 'g'))`,
+      // Which scene's save reached a waypoint. Null where an import only dated it, so a redo of that
+      // scene leaves it reached rather than taking back what the save never did.
+      `alter table waypoints add column reached_by_scene_id uuid references scenes(id)`,
+      // Rows already there: a save reaches a waypoint written before the scene, while an import writes
+      // its scenes first and its waypoints after, in one transaction. So a waypoint older than the
+      // scene it is dated to was reached by that scene's save.
+      `update waypoints set reached_by_scene_id = reached_in_scene_id
+        from scenes where scenes.id = waypoints.reached_in_scene_id and scenes.created_at > waypoints.created_at`,
+    ],
+  },
 ];
 
 /**

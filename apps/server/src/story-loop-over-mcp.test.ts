@@ -5,7 +5,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import type { Briefing, EntryLookup, SavedScene } from '@timeweft/contract';
+import type { Briefing, EntryLookup, SavedScene, SceneInFull } from '@timeweft/contract';
 import { startServerForTests, type RunningServer } from './server-for-tests.ts';
 
 let running: RunningServer;
@@ -23,6 +23,7 @@ interface ToolAnswer<Answer> {
   answer: Answer;
 }
 
+/** The answer from structured content; resume_run carries only sizes there, so its answer is undefined. */
 async function callTool<Answer>(name: string, input: Record<string, unknown>): Promise<ToolAnswer<Answer>> {
   const result = await client.callTool({ name, arguments: input });
   const content = result.content as Array<{ type: string; text: string }>;
@@ -71,8 +72,9 @@ test('a story is begun, saved three times, resumed, looked into, redone and resu
   assert.equal(thirdScene.answer.scene.number, 3);
   assert.match(thirdScene.text, /Threads closed:/);
 
-  const resumed = await callTool<Briefing>('resume_run', { run: slug, upcoming: ['Nell the ferrywoman'] });
-  assert.equal(resumed.text, resumed.answer.text, 'the briefing tool answers with the briefing itself');
+  const resumed = await callTool('resume_run', { run: slug, upcoming: ['Nell the ferrywoman'] });
+  const resumedSizes = (await client.callTool({ name: 'resume_run', arguments: { run: slug, upcoming: ['Nell the ferrywoman'] } })).structuredContent as Omit<Briefing, 'text'>;
+  assert.equal(Buffer.byteLength(resumed.text, 'utf8'), resumedSizes.bytes, 'the briefing tool answers with the briefing itself, and its sizes beside it');
   assert.match(resumed.text, /Nell rows home alone/);
 
   const lookedUp = await callTool<EntryLookup>('look_up', { run: slug, name: 'nell the ferrywoman', withHistory: true });
@@ -87,7 +89,7 @@ test('a story is begun, saved three times, resumed, looked into, redone and resu
   });
   assert.equal(redone.answer.scene.number, 3);
 
-  const resumedAgain = await callTool<Briefing>('resume_run', { run: slug, upcoming: ['Nell the ferrywoman'] });
+  const resumedAgain = await callTool('resume_run', { run: slug, upcoming: ['Nell the ferrywoman'] });
   assert.match(resumedAgain.text, /Nell sleeps on the far bank/);
   assert.doesNotMatch(resumedAgain.text, /Nell rows home alone/, 'the struck take is still served');
   const afterRedo = await callTool<EntryLookup>('look_up', { run: slug, name: 'Nell the ferrywoman' });
@@ -100,4 +102,16 @@ test('a refusal over MCP is an error result carrying the sentence', async () => 
   const result = await client.callTool({ name: 'look_up', arguments: { run: 'the-ferry-crossing', name: 'a stranger' } });
   assert.equal(result.isError, true);
   assert.match(JSON.stringify(result.content), /Nothing in this run is called \\"a stranger\\"/);
+});
+
+test('read_scene answers the journeys first travelled in the scene, and says them', async () => {
+  const slug = 'the-mill-road';
+  await callTool('begin_run', { slug, title: 'The Mill Road' });
+  await callTool('save_scene', {
+    run: slug, title: 'To the mill', when: 'a morning', summary: 'The baker walks to the mill.', situationAfter: 'She is at the mill.',
+    legs: [{ from: 'the ford', to: 'the mill', duration: 'half a morning', note: 'on foot' }],
+  });
+  const read = await callTool<SceneInFull>('read_scene', { run: slug, number: 1 });
+  assert.deepEqual(read.answer.legs.map((leg) => [leg.fromPlace, leg.toPlace, leg.duration]), [['the ford', 'the mill', 'half a morning']]);
+  assert.match(read.text, /Journeys:\n- From the ford to the mill: half a morning \(on foot\)/);
 });

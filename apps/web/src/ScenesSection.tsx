@@ -166,6 +166,16 @@ function SceneInFull({ scene, snapshot }: { scene: SceneRecord; snapshot: RunSna
           <ul>{established.threadsClosed.map((thread) => <li key={thread.id}>{thread.text}: {thread.resolution}</li>)}</ul>
         </>
       )}
+      {established.legs.length > 0 && (
+        <>
+          <h5>Journeys first travelled</h5>
+          <ul>
+            {established.legs.map((leg) => (
+              <li key={leg.id}>From {leg.fromPlace} to {leg.toPlace}: {leg.duration}{leg.note === '' ? '' : ` (${leg.note})`}</li>
+            ))}
+          </ul>
+        </>
+      )}
       {Object.values(established).every((items) => items.length === 0) && <p className="quiet">Nothing recorded as established here.</p>}
     </div>
   );

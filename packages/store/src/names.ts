@@ -59,3 +59,11 @@ function twoAnswerTo(name: string, holders: NameableEntry[], where: string): str
   const described = holders.map((holder) => `"${holder.name}" (id ${holder.id})`).join(' and ');
   return `More than one entry answers to "${name.trim()}" (named ${where}): ${described}. Use a name only one of them goes by.`;
 }
+
+/**
+ * A property as the store keeps it: trimmed and in lower case, so `Where` and `where` are one
+ * property. Every door that takes a property passes it through here before storing or comparing.
+ */
+export function normaliseProperty(property: string): string {
+  return property.trim().toLowerCase();
+}

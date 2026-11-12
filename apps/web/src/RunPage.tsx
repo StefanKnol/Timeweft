@@ -7,12 +7,14 @@ import { RulingsSection } from './RulingsSection.tsx';
 import { ThreadsSection } from './ThreadsSection.tsx';
 import { CollisionsSection } from './CollisionsSection.tsx';
 import { BriefingSection } from './BriefingSection.tsx';
+import { JourneysSection } from './JourneysSection.tsx';
 
 const SECTION_TITLES: Record<RunSection, string> = {
   scenes: 'Scenes',
   entries: 'People, places and things',
   rulings: 'Rulings',
   threads: 'Threads',
+  journeys: 'Waypoints and journeys',
   collisions: 'Collisions',
   briefing: 'The briefing',
 };
@@ -86,6 +88,8 @@ function SectionBody({ route, snapshot, readAgain }: { route: RunRoute; snapshot
       return <section>{heading}<RulingsSection snapshot={snapshot} /></section>;
     case 'threads':
       return <section>{heading}<ThreadsSection snapshot={snapshot} /></section>;
+    case 'journeys':
+      return <section>{heading}<JourneysSection snapshot={snapshot} /></section>;
     case 'collisions':
       return <section>{heading}<CollisionsSection snapshot={snapshot} readAgain={readAgain} /></section>;
     case 'briefing':

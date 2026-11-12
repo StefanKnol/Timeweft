@@ -163,7 +163,35 @@ export function sceneEndingSegment(segment: string): number | null {
     }
   }
   if (/^Scenes?\s+\d/i.test(trimmed)) return lastSceneNumberOfReference(trimmed);
-  return null;
+  return sceneOfLeadingPhrase(trimmed);
+}
+
+/**
+ * The scene a segment's leading phrase is dated to, in the common shape "At the mill (Scene 7):
+ * grinding". The leading phrase is the text before the first colon outside any parenthesis, at most
+ * eighty characters and holding no sentence end of its own; it counts only where a parenthetical
+ * naming a scene is the last thing in it. Read only where nothing at the segment's end dates it.
+ */
+export function sceneOfLeadingPhrase(segment: string): number | null {
+  const colonIndex = firstTopLevelColon(segment);
+  if (colonIndex === -1 || colonIndex > 80) return null;
+  const phrase = segment.slice(0, colonIndex).trim();
+  if (!phrase.endsWith(')')) return null;
+  const { inners, without } = topLevelParentheticals(phrase);
+  if (/[.!?;]/.test(without)) return null;
+  const last = inners[inners.length - 1];
+  return last === undefined ? null : lastSceneNumberOfReference(last);
+}
+
+function firstTopLevelColon(text: string): number {
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === '(') depth += 1;
+    else if (character === ')' && depth > 0) depth -= 1;
+    else if (character === ':' && depth === 0) return index;
+  }
+  return -1;
 }
 
 /**
@@ -174,9 +202,51 @@ export function sceneEndingSegment(segment: string): number | null {
  */
 const stackedHistoryMarker = /(?<=[.;!?)"”’]\s+)(?:Before that|Before|Earlier|Previously)\s*[:,]\s*/g;
 
-export function splitStackedHistory(text: string): string[] {
+/**
+ * Two rules keep a newer fact from being filed as older, because a hand-kept field does not always
+ * stay newest first after its first marker:
+ *
+ * - An older segment ends at the next history marker or at the next labelled clause, a sentence
+ *   opening on a short phrase dated by its closing parenthetical ("On the bank (Scene 12): ...")
+ *   or on "Scene N:". The clause stands as an older segment of its own.
+ * - A segment after a marker whose own scene is later than the present's is not older at all: it
+ *   is kept with the present, appended in the order written, so nothing it says closes anything.
+ *
+ * The present's scene is the one its own text gives, or `presentSceneWhereUndated` where its text
+ * gives none (a label's stamp, say). With neither, nothing can be compared and the order written
+ * is trusted.
+ */
+export function splitStackedHistory(text: string, options: { presentSceneWhereUndated?: number | null } = {}): string[] {
   const segments = text.split(stackedHistoryMarker).map((segment) => segment.trim()).filter((segment) => segment !== '');
-  return segments.length === 0 ? [text.trim()] : segments;
+  if (segments.length === 0) return [text.trim()];
+  const [present = '', ...olderParts] = segments;
+  const older = olderParts.flatMap(splitAtLabelledClauses);
+  const presentScene = sceneEndingSegment(present) ?? options.presentSceneWhereUndated ?? null;
+  const keptWithThePresent: string[] = [];
+  const reallyOlder: string[] = [];
+  for (const segment of older) {
+    const scene = sceneEndingSegment(segment);
+    if (presentScene !== null && scene !== null && scene > presentScene) keptWithThePresent.push(segment);
+    else reallyOlder.push(segment);
+  }
+  return [[present, ...keptWithThePresent].join(' '), ...reallyOlder];
+}
+
+const sentenceStartPattern = /(?<=[.;!?)"”’]\s+)\S/g;
+
+function splitAtLabelledClauses(segment: string): string[] {
+  const pieces: string[] = [];
+  let start = 0;
+  sentenceStartPattern.lastIndex = 0;
+  for (const match of segment.matchAll(sentenceStartPattern)) {
+    const rest = segment.slice(match.index);
+    const opensALabelledClause = sceneOfLeadingPhrase(rest) !== null || /^Scenes?\s+\d[^:.;]{0,20}:/i.test(rest);
+    if (!opensALabelledClause) continue;
+    pieces.push(segment.slice(start, match.index).trim());
+    start = match.index;
+  }
+  pieces.push(segment.slice(start).trim());
+  return pieces.filter((piece) => piece !== '');
 }
 
 /** The present of a field that stacks its history, and the bytes of history after it. */

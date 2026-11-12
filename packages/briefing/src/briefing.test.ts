@@ -3,7 +3,7 @@ import { Buffer } from 'node:buffer';
 import { describe, it } from 'node:test';
 import type { Briefing, RunSnapshot } from '@timeweft/contract';
 import { buildBriefing } from './briefing.ts';
-import { generateRun, millerRun, scene } from './demo-run.ts';
+import { entry, fact, generateRun, leg, millerRun, note, ruling, scene } from './demo-run.ts';
 import type { GeneratedRunOptions } from './demo-run.ts';
 import { rulingsBearingOn, standingScenesOf, threadsOpenFor } from './readers.ts';
 import { CUT_MARKER } from './text-fitting.ts';
@@ -12,10 +12,10 @@ const BUDGETS = [2000, 2100, 2600, 3300, 5000, 8000, 13_000, 20_000, 34_000, 55_
 
 const SIZES: Array<Omit<GeneratedRunOptions, 'seed'>> = [
   { scenes: 0, entries: 0, factsPerEntry: 0, notesPerEntry: 0, rulings: 0, threads: 0, clocks: 0, waypoints: 0 },
-  { scenes: 1, entries: 1, factsPerEntry: 1, notesPerEntry: 1, rulings: 1, threads: 1, clocks: 1, waypoints: 1 },
-  { scenes: 12, entries: 8, factsPerEntry: 6, notesPerEntry: 5, rulings: 10, threads: 6, clocks: 2, waypoints: 3 },
-  { scenes: 80, entries: 40, factsPerEntry: 20, notesPerEntry: 15, rulings: 60, threads: 30, clocks: 4, waypoints: 8 },
-  { scenes: 300, entries: 90, factsPerEntry: 40, notesPerEntry: 30, rulings: 200, threads: 80, clocks: 12, waypoints: 40 },
+  { scenes: 1, entries: 1, factsPerEntry: 1, notesPerEntry: 1, rulings: 1, threads: 1, clocks: 1, waypoints: 1, legs: 1 },
+  { scenes: 12, entries: 8, factsPerEntry: 6, notesPerEntry: 5, rulings: 10, threads: 6, clocks: 2, waypoints: 3, legs: 4 },
+  { scenes: 80, entries: 40, factsPerEntry: 20, notesPerEntry: 15, rulings: 60, threads: 30, clocks: 4, waypoints: 8, legs: 30 },
+  { scenes: 300, entries: 90, factsPerEntry: 40, notesPerEntry: 30, rulings: 200, threads: 80, clocks: 12, waypoints: 40, legs: 120 },
 ];
 
 const HUGE_FIELDS = ['register', 'situation', 'title', 'summary', 'fact', 'ruling'] as const;
@@ -288,6 +288,10 @@ describe('the sections', () => {
       const threads = sectionNamed(briefing, 'Open threads');
       assert.equal(threads.served + threads.leftOut, threadsOpenFor(snapshot, { aboutEntryIds: [], includeClosed: false }).length, `${label}: threads`);
       assert.equal(threads.served, [...sectionTextOf(briefing, 'Open threads').matchAll(/^- Thread thread-\d+: /gm)].length, `${label}: threads served`);
+      const journeys = sectionNamed(briefing, 'Journeys already travelled');
+      const servableLegs = snapshot.legs.filter((item) => !(item.sceneId ?? '').endsWith('-struck'));
+      assert.equal(journeys.served + journeys.leftOut, servableLegs.length, `${label}: journeys`);
+      assert.equal(journeys.served, [...sectionTextOf(briefing, 'Journeys already travelled').matchAll(/^- .+ to .+: /gm)].length, `${label}: journeys served`);
       const clocks = sectionNamed(briefing, 'The clocks');
       assert.equal(clocks.served + clocks.leftOut, snapshot.clocks.length, `${label}: clocks`);
       for (const section of briefing.sections) {
@@ -348,3 +352,119 @@ describe('speed', () => {
     assert.ok(elapsed < 500, `took ${elapsed.toFixed(0)} ms`);
   });
 });
+
+describe('the faults found on review', () => {
+  it('serves the journeys already travelled between the open threads and the last scenes', () => {
+    const briefing = buildBriefing(millerRun(), { upcoming: [], budgetBytes: 20_000 });
+    const names = briefing.sections.map((section) => section.name);
+    assert.equal(names.indexOf('Journeys already travelled'), names.indexOf('Open threads') + 1);
+    assert.equal(names.indexOf('The last scenes'), names.indexOf('Journeys already travelled') + 1);
+    const text = briefing.text;
+    assert.ok(text.indexOf('## Open threads\n') < text.indexOf('## Journeys already travelled\n'));
+    assert.ok(text.indexOf('## Journeys already travelled\n') < text.indexOf('## The last scenes\n'));
+    const journeys = sectionTextOf(briefing, 'Journeys already travelled');
+    const newest = journeys.indexOf('- The ford to The mill: half a day on foot (carrying the ferry keeper)\n');
+    const older = journeys.indexOf('- the far bank to the market town: two days by cart\n');
+    assert.ok(newest >= 0 && older > newest, 'the newest first, and a note in brackets only where there is one');
+    assert.ok(!journeys.includes('an hour by raft'), 'never a journey from a struck take');
+  });
+
+  it('serves the journeys touching the upcoming places first, by name or another name, case-blind', () => {
+    const byName = sectionTextOf(buildBriefing(millerRun(), { upcoming: ['THE MARKET TOWN'], budgetBytes: 20_000 }), 'Journeys already travelled');
+    assert.ok(byName.indexOf('the market town') < byName.indexOf('The mill:'), 'an older journey to a place asked for leads');
+    const snapshot = millerRun();
+    snapshot.legs.push(leg({ id: 'leg-to-miller', fromPlace: 'the reeds', toPlace: 'The Miller', duration: 'an hour', sceneId: 'scene-1', createdAt: momentOf(snapshot) }));
+    const byOtherName = sectionTextOf(buildBriefing(snapshot, { upcoming: ['Wenna the miller'], budgetBytes: 20_000 }), 'Journeys already travelled');
+    assert.ok(byOtherName.startsWith('## Journeys already travelled\n- the reeds to The Miller: an hour\n'), byOtherName);
+  });
+
+  it('says how many journeys it left out and that read_scene fetches them', () => {
+    const snapshot = generateRun({ scenes: 40, entries: 10, factsPerEntry: 3, notesPerEntry: 2, rulings: 3, threads: 3, clocks: 1, waypoints: 1, legs: 200, seed: 31 });
+    const briefing = buildBriefing(snapshot, { upcoming: [], budgetBytes: 4000 });
+    const journeys = sectionNamed(briefing, 'Journeys already travelled');
+    assert.ok(journeys.served > 0 && journeys.leftOut > 0);
+    assert.match(journeys.fetchWith, /read_scene/);
+  });
+
+  it('says that list_runs carries a register cut short, not that a larger budget would', () => {
+    const snapshot = generateRun({ scenes: 3, entries: 1, factsPerEntry: 1, notesPerEntry: 1, rulings: 1, threads: 1, clocks: 1, waypoints: 1, seed: 5, hugeField: 'register', hugeFieldBytes: 400_000 });
+    const runSection = sectionNamed(buildBriefing(snapshot, { upcoming: [], budgetBytes: 200_000 }), 'The run');
+    assert.match(runSection.fetchWith, /list_runs/);
+    assert.doesNotMatch(runSection.fetchWith, /larger budgetBytes/);
+  });
+
+  it('never cuts a scene line inside its title, even where the title holds a colon', () => {
+    const snapshot = generateRun({ scenes: 0, entries: 0, factsPerEntry: 0, notesPerEntry: 0, rulings: 0, threads: 0, clocks: 0, waypoints: 0, seed: 4 });
+    const title = 'The mill: a long night by the water wheel and the grinding stones and the reeds';
+    snapshot.scenes = [1, 2, 3, 4].map((number) => scene({
+      id: `scene-${number}`, number, title,
+      summary: 'The miller and the ferry keeper wait out the storm by the wheel. '.repeat(30),
+    }));
+    let cutLines = 0;
+    for (let budgetBytes = 2000; budgetBytes <= 9000; budgetBytes += 3) {
+      for (const line of buildBriefing(snapshot, { upcoming: [], budgetBytes }).text.split('\n')) {
+        if (!line.startsWith('- Scene') || !line.endsWith(CUT_MARKER)) continue;
+        cutLines += 1;
+        assert.ok(line.includes(`"${title}", day `), `budget ${budgetBytes}: ${line}`);
+      }
+    }
+    assert.ok(cutLines > 0);
+  });
+
+  it('serves the newest trail notes of an entry with many facts ahead of its later facts', () => {
+    const snapshot = millerRun();
+    for (let factIndex = 0; factIndex < 80; factIndex += 1) {
+      snapshot.facts.push(fact({ id: `fact-many-${factIndex}`, entryId: 'entry-keeper', property: `habit ${String(factIndex).padStart(2, '0')}`,
+        value: 'mends rope by the fire and hums while the river runs', fromSceneId: 'scene-2' }));
+    }
+    const briefing = buildBriefing(snapshot, { upcoming: ['Bram', 'Wenna the miller'], budgetBytes: 5000 });
+    const page = sectionTextOf(briefing, 'On the page next');
+    assert.ok(sectionNamed(briefing, 'On the page next').leftOut > 0, 'not every fact fits at this size');
+    assert.ok(page.includes('- Trail, scene 3: Climbed to the loft to sleep.'), page);
+    assert.ok(page.includes('- Trail, scene 2: Mended the ferry rope.'));
+    assert.ok(page.includes('- who: grinds grain for the valley'), 'the other name is not starved');
+  });
+
+  it('serves a ruling before any old scene summary whenever the budget allows one', () => {
+    const snapshot = generateRun({ scenes: 30, entries: 6, factsPerEntry: 4, notesPerEntry: 2, rulings: 0, threads: 0, clocks: 1, waypoints: 1, seed: 17 });
+    snapshot.rulings = [1, 2, 3, 4, 5].map((number) => ruling({ id: `ruling-${number}`, number, text: `Ruling ${number}: the miller sings at dawn. ${'The ferry keeper hums along by the wheel. '.repeat(5)}` }));
+    for (const item of snapshot.scenes) item.summary = 'The ferry crosses the ford and comes back with sacks of grain for the mill. '.repeat(4);
+    let budgetsChecked = 0;
+    for (let budgetBytes = 2000; budgetBytes <= 6000; budgetBytes += 25) {
+      const briefing = buildBriefing(snapshot, { upcoming: [], budgetBytes });
+      if (sectionNamed(briefing, 'The last scenes').served === 0) continue;
+      budgetsChecked += 1;
+      assert.ok(sectionNamed(briefing, 'Rulings that bear').served > 0, `budget ${budgetBytes}: scenes served and no ruling`);
+    }
+    assert.ok(budgetsChecked > 0);
+  });
+});
+
+describe('room a section that left something out did not use', () => {
+  it('goes back to a more important section that was cut, not on to a less important one', () => {
+    const withoutRulings = millerRun();
+    withoutRulings.rulings = [];
+    for (let factIndex = 0; factIndex < 120; factIndex += 1) {
+      withoutRulings.facts.push(fact({ id: `fact-many-${factIndex}`, entryId: 'entry-keeper', property: `habit ${String(factIndex).padStart(3, '0')}`,
+        value: 'mends rope by the fire and hums while the river runs', fromSceneId: 'scene-2' }));
+    }
+    for (let number = 4; number <= 60; number += 1) {
+      withoutRulings.scenes.push(scene({ id: `scene-${number}`, number, summary: 'The ferry crosses the ford and comes back again. '.repeat(3) }));
+    }
+    // One ruling too long for its share: the section leaves it out and uses almost none of its room.
+    const withALongRuling = structuredClone(withoutRulings);
+    withALongRuling.rulings = [ruling({ id: 'ruling-long', number: 1, text: 'The miller never lies. '.repeat(300) })];
+    for (const budgetBytes of [5000, 6500, 8000]) {
+      const plain = buildBriefing(withoutRulings, { upcoming: ['Bram'], budgetBytes });
+      const kept = buildBriefing(withALongRuling, { upcoming: ['Bram'], budgetBytes });
+      assert.equal(sectionNamed(kept, 'Rulings that bear').served, 0, `${budgetBytes}: the ruling does not fit`);
+      assert.ok(sectionNamed(kept, 'On the page next').leftOut > 0, `${budgetBytes}: the page is still cut`);
+      assert.ok(sectionNamed(kept, 'On the page next').served > sectionNamed(plain, 'On the page next').served,
+        `${budgetBytes}: the rulings' room went to the page ahead of it`);
+    }
+  });
+});
+
+function momentOf(snapshot: RunSnapshot): string {
+  return snapshot.run.createdAt;
+}

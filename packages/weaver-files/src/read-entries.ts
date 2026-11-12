@@ -81,7 +81,7 @@ export function factsOfLabelledBullet(label: string, text: string): ImportedFact
   const stampNote = stampParts.join('; ');
   const labelScene = stampParts.map((part) => lastSceneNumberOfReference(part)).find((number) => number !== null) ?? null;
 
-  const segmentsNewestFirst = splitStackedHistory(text);
+  const segmentsNewestFirst = splitStackedHistory(text, { presentSceneWhereUndated: labelScene });
   const facts: ImportedFact[] = segmentsNewestFirst.map((segment, index) => {
     const value = index === 0 ? segment.replace(/^now\s*:\s*/i, '') : segment;
     const ownScene = sceneEndingSegment(value);
@@ -174,6 +174,7 @@ function readEntryLines(lines: NumberedLine[], entry: ImportedEntry, fileName: s
   for (const stray of strays) {
     unplaced.push(`${fileName} line ${stray.lineNumber}: a line under ${'an entry'} that is not a bullet and follows none.`);
   }
+  const labelledBullets: ImportedFact[][] = [];
   for (const bullet of bullets) {
     const boldMatch = /^\*\*(.+?)\*\*\s*:?\s*([\s\S]*)$/.exec(bullet.text);
     if (boldMatch) {
@@ -183,7 +184,9 @@ function readEntryLines(lines: NumberedLine[], entry: ImportedEntry, fileName: s
         addTrailNote(entry, label, rest);
         continue;
       }
-      entry.facts.push(...factsOfLabelledBullet(label, rest));
+      const facts = factsOfLabelledBullet(label, rest);
+      labelledBullets.push(facts);
+      entry.facts.push(...facts);
       continue;
     }
     const trailMatch = /^Scenes?\s+(\d+(?:\s*[-–]\s*\d+)?)\s*([\s\S]*)$/i.exec(bullet.text);
@@ -203,7 +206,9 @@ function readEntryLines(lines: NumberedLine[], entry: ImportedEntry, fileName: s
     // A plain "- Label: text" bullet: a short label before the first colon, with no sentence in it.
     const plainMatch = /^([^:\n]{1,80}):\s*([\s\S]*)$/.exec(bullet.text);
     if (plainMatch && !/[.!?]\s/.test(plainMatch[1] ?? '') && !(plainMatch[1] ?? '').trim().startsWith('(')) {
-      entry.facts.push(...factsOfLabelledBullet((plainMatch[1] ?? '').trim(), (plainMatch[2] ?? '').trim()));
+      const facts = factsOfLabelledBullet((plainMatch[1] ?? '').trim(), (plainMatch[2] ?? '').trim());
+      labelledBullets.push(facts);
+      entry.facts.push(...facts);
       continue;
     }
     const scene = firstParentheticalSceneNumber(bullet.text) ?? lastSceneNumberOfReference(bullet.text);
@@ -212,6 +217,35 @@ function readEntryLines(lines: NumberedLine[], entry: ImportedEntry, fileName: s
       continue;
     }
     unplaced.push(`${fileName} line ${bullet.lineNumber}: a bullet with neither a label nor a scene number, so it is neither a fact nor a trail note.`);
+  }
+  markAdditiveRecords(labelledBullets);
+}
+
+/** The suffix that tells the store a property's facts are additive records, never chained. */
+export const ADDITIVE_PROPERTY_SUFFIX = ' (each)';
+
+/**
+ * Where an entry has two or more separate bullets under one label, the store would chain them
+ * into one history, the later closing the earlier. That is right for a value that changed and
+ * wrong for a list of dated events kept one bullet each. The rule: such a set of bullets is
+ * additive, and every fact in it is renamed "<property> (each)", only where every bullet in the
+ * set is a single segment (it stacks no history with markers) and dates itself (it carries its own
+ * scene, from its text or its label's stamp). One undated bullet, or one that stacks its history,
+ * leaves the whole set a superseding history as written, since then the bullets read as one value
+ * kept over time. A lone bullet is never renamed.
+ */
+function markAdditiveRecords(labelledBullets: ImportedFact[][]): void {
+  const bulletsByProperty = new Map<string, ImportedFact[][]>();
+  for (const facts of labelledBullets) {
+    const property = facts[0]?.property;
+    if (property === undefined) continue;
+    bulletsByProperty.set(property, [...(bulletsByProperty.get(property) ?? []), facts]);
+  }
+  for (const [property, group] of bulletsByProperty) {
+    if (group.length < 2) continue;
+    const eachIsADatedRecord = group.every((facts) => facts.length === 1 && facts[0]?.fromScene !== null);
+    if (!eachIsADatedRecord) continue;
+    for (const facts of group) for (const fact of facts) fact.property = property + ADDITIVE_PROPERTY_SUFFIX;
   }
 }
 

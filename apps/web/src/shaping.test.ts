@@ -8,7 +8,7 @@ import {
   budgetFromText, collisionsWithBothSides, entriesGroupedByKind, factsOfEntryByProperty, hashOfRoute,
   heldSpanInWords, isAuthorOnly, outcomeOfResponse, readingsWithClockNames, routeFromHash,
   routeOfOperation, rulingsMatching, scenesByNumber, sizeInWords, threadsOpenFirst, trailOfEntry,
-  upcomingNamesFromText, whatASceneEstablished,
+  upcomingNamesFromText, waypointsAheadFirst, journeysInSceneOrder, whatASceneEstablished,
 } from './shaping.ts';
 
 // A made-up demo world: a miller, a ferry, a ford and a lantern.
@@ -91,8 +91,17 @@ function demoSnapshot(): RunSnapshot {
       thread('t-later', 'Who cracked the lantern?', 's2', null, '2026-01-01T00:00:13Z'),
       thread('t-early', 'Where does the ferry go at night?', 's1', null, '2026-01-01T00:00:07Z'),
     ],
-    waypoints: [],
-    legs: [],
+    waypoints: [
+      { id: 'w-reached', runId: 'run', text: 'The miller pays the toll.', reachedInSceneId: 's3', createdAt: '2026-01-01T00:00:30Z' },
+      { id: 'w-ahead', runId: 'run', text: 'The ford floods.', reachedInSceneId: null, createdAt: '2026-01-01T00:00:31Z' },
+      { id: 'w-struck', runId: 'run', text: 'The lantern breaks.', reachedInSceneId: 's2-old', createdAt: '2026-01-01T00:00:32Z' },
+    ],
+    legs: [
+      { id: 'leg-later', runId: 'run', fromPlace: 'the ford', toPlace: 'the ferry', duration: 'an hour', note: '', sceneId: 's3', createdAt: '2026-01-01T00:00:41Z' },
+      { id: 'leg-early', runId: 'run', fromPlace: 'the mill', toPlace: 'the ford', duration: 'half a morning', note: 'on foot', sceneId: 's2', createdAt: '2026-01-01T00:00:40Z' },
+      { id: 'leg-struck', runId: 'run', fromPlace: 'the mill', toPlace: 'the ferry', duration: 'a day', note: '', sceneId: 's2-old', createdAt: '2026-01-01T00:00:39Z' },
+      { id: 'leg-undated', runId: 'run', fromPlace: 'the ferry', toPlace: 'the sea', duration: 'a week', note: '', sceneId: null, createdAt: '2026-01-01T00:00:38Z' },
+    ],
     collisions: [],
   };
 }
@@ -171,6 +180,27 @@ test('what a scene established is read out of the run by the scene id', () => {
   assert.deepEqual(established.threadsOpened.map((thread) => thread.id), ['t-later']);
   const third = whatASceneEstablished('s3', demoSnapshot());
   assert.deepEqual(third.threadsClosed.map((thread) => thread.id), ['t-closed']);
+});
+
+test('a scene establishes the journeys first travelled in it, and a struck take keeps its own', () => {
+  assert.deepEqual(whatASceneEstablished('s2', demoSnapshot()).legs.map((leg) => leg.id), ['leg-early']);
+  assert.deepEqual(whatASceneEstablished('s2-old', demoSnapshot()).legs.map((leg) => leg.id), ['leg-struck']);
+});
+
+test('waypoints are drawn ahead first, then reached in scene order, and one reached only in a struck take is still ahead', () => {
+  const { ahead, reached } = waypointsAheadFirst(demoSnapshot());
+  assert.deepEqual(ahead.map((item) => item.waypoint.id), ['w-ahead', 'w-struck']);
+  assert.deepEqual(reached.map((item) => [item.waypoint.id, item.reachedInSceneNumber]), [['w-reached', 3]]);
+});
+
+test('journeys are drawn in scene order, those before the scenes first, and a struck take\'s journey is kept apart', () => {
+  const { travelled, inStruckTakes } = journeysInSceneOrder(demoSnapshot());
+  assert.deepEqual(travelled.map((item) => [item.leg.id, item.sceneNumber]), [['leg-undated', null], ['leg-early', 2], ['leg-later', 3]]);
+  assert.deepEqual(inStruckTakes.map((item) => [item.leg.id, item.sceneNumber]), [['leg-struck', 2]]);
+});
+
+test('the journeys part of a run has its own address', () => {
+  assert.deepEqual(routeFromHash('#/runs/the-mill/journeys'), { page: 'run', slug: 'the-mill', section: 'journeys', itemId: null });
 });
 
 test('a reading names its clock, and a clock the run lost is said as such', () => {

@@ -20,7 +20,7 @@ import {
 } from '@timeweft/contract';
 import type { Database } from './database.ts';
 import { applyMigrations } from './migrations.ts';
-import { NameIndex, normaliseName } from './names.ts';
+import { NameIndex, normaliseName, normaliseProperty } from './names.ts';
 import {
   collisionFromRow, entryFromRow, factFromRow, rulingFromRow, runFromRow, sceneFromRow,
   threadFromRow, type EntryRow, type FactRow, type RunRow, type SceneRow,
@@ -154,17 +154,19 @@ export class PostgresStore implements Store {
       const about = input.about === undefined ? null : names.resolve(input.about, 'as what the fact is about');
       const newest = await newestStandingScene(transaction, run.id);
       const sceneId = newest?.id ?? null;
-      const holding = await holdingFacts(transaction, entry.id, input.property);
+      const property = normaliseProperty(input.property);
+      // Each lane closes only its own: an author-only fact never ends an open one, or the story would
+      // see a value end with nothing in its place, and an open fact never ends an author-only one.
+      const holding = await holdingFacts(transaction, entry.id, property, input.visibility);
       const identical = holding.find((fact) =>
-        fact.source === 'author' && fact.value === input.value && fact.about_entry_id === (about?.id ?? null)
-        && fact.visibility === input.visibility);
+        fact.source === 'author' && fact.value === input.value && fact.about_entry_id === (about?.id ?? null));
       if (identical !== undefined) return factFromRow(identical);
       if (holding.length > 0 && sceneId === null) {
-        throw new Refusal(`"${entry.name}" already holds a ${input.property} and the run has no scene yet for it to stop holding at. Save the first scene, then state this.`);
+        throw new Refusal(`"${entry.name}" already holds a ${property} and the run has no scene yet for it to stop holding at. Save the first scene, then state this.`);
       }
       if (sceneId !== null) await closeFacts(transaction, holding, sceneId, null);
       return factFromRow(await insertFact(transaction, {
-        runId: run.id, entryId: entry.id, property: input.property, value: input.value,
+        runId: run.id, entryId: entry.id, property, value: input.value,
         aboutEntryId: about?.id ?? null, fromSceneId: sceneId, source: 'author',
         visibility: input.visibility, note: input.note, establishedBySceneId: null,
       }));
@@ -187,15 +189,27 @@ export class PostgresStore implements Store {
       const sceneId = collision.scene_id;
       if (sceneId === null) throw new Refusal('That collision came from no scene, so there is no scene for the author\'s fact to stop holding at.');
       const standingFact = await transaction.selectFrom('facts').selectAll().where('id', '=', collision.standing_fact_id).executeTakeFirstOrThrow();
+      if (standingFact.visibility !== 'open') {
+        // A story never sees the author-only lane, so no collision can concern it. A row that says
+        // otherwise was written before that rule, and is not acted on.
+        throw new Refusal('That collision stood against an author-only fact, which a story never meets. Keep the author\'s instead.');
+      }
       if (standingFact.until_scene_id !== null) {
         throw new Refusal('The author\'s fact that collision stood against has been replaced since, so the story\'s cannot be taken in its place. Keep the author\'s instead.');
       }
+      const property = normaliseProperty(collision.property);
+      const movedOnAt = await earliestLaterSceneHoldingTheProperty(transaction, collision.entry_id, property, sceneId);
+      // Only the fact the collision names is closed. Anything a later scene established still holds.
+      await closeFacts(transaction, [standingFact], sceneId, sceneId);
       // The story's fact goes in as though the scene's save had written it, so a redo of that scene takes it back too.
-      await closeFacts(transaction, await holdingFacts(transaction, collision.entry_id, collision.property), sceneId, sceneId);
+      // Where the property has moved on since that scene, it goes in as history: it held from the
+      // collision's scene until the first later scene that established what holds now, and never
+      // comes back to life over that.
       await insertFact(transaction, {
-        runId: collision.run_id, entryId: collision.entry_id, property: collision.property,
+        runId: collision.run_id, entryId: collision.entry_id, property,
         value: collision.proposed_value, aboutEntryId: collision.proposed_about_entry_id,
         fromSceneId: sceneId, source: 'story', visibility: 'open', note: '', establishedBySceneId: sceneId,
+        untilSceneId: movedOnAt, closedBySceneId: movedOnAt,
       });
       const taken = await transaction.updateTable('collisions').set({ state: 'story-taken' })
         .where('id', '=', collision.id).returningAll().executeTakeFirstOrThrow();
@@ -243,10 +257,12 @@ function withNameFields(row: EntryRow): IndexedEntry {
   return Object.assign(row, { alsoKnownAs: row.also_known_as });
 }
 
-async function holdingFacts(database: Kysely<Database>, entryId: string, property?: string): Promise<FactRow[]> {
-  let query = database.selectFrom('facts').selectAll().where('entry_id', '=', entryId).where('until_scene_id', 'is', null);
-  if (property !== undefined) query = query.where('property', '=', property);
-  return query.orderBy('written_order').execute();
+/** The facts holding for one property of one entry, in one lane: open, or author-only. */
+async function holdingFacts(database: Kysely<Database>, entryId: string, property: string, visibility: Visibility): Promise<FactRow[]> {
+  return database.selectFrom('facts').selectAll()
+    .where('entry_id', '=', entryId).where('until_scene_id', 'is', null)
+    .where('property', '=', property).where('visibility', '=', visibility)
+    .orderBy('written_order').execute();
 }
 
 async function closeFacts(database: Kysely<Database>, facts: FactRow[], untilSceneId: string, closedBySceneId: string | null): Promise<void> {
@@ -266,15 +282,34 @@ interface FactToWrite {
   visibility: Visibility;
   note: string;
   establishedBySceneId: string | null;
+  /** Given only where the fact is written as history, already closed. */
+  untilSceneId?: string | null;
+  closedBySceneId?: string | null;
 }
 
 async function insertFact(database: Kysely<Database>, fact: FactToWrite): Promise<FactRow> {
   return database.insertInto('facts').values({
     id: randomUUID(), run_id: fact.runId, entry_id: fact.entryId, property: fact.property, value: fact.value,
-    about_entry_id: fact.aboutEntryId, from_scene_id: fact.fromSceneId, until_scene_id: null,
+    about_entry_id: fact.aboutEntryId, from_scene_id: fact.fromSceneId, until_scene_id: fact.untilSceneId ?? null,
     source: fact.source, visibility: fact.visibility, note: fact.note,
-    established_by_scene_id: fact.establishedBySceneId, closed_by_scene_id: null,
+    established_by_scene_id: fact.establishedBySceneId, closed_by_scene_id: fact.closedBySceneId ?? null,
   }).returningAll().executeTakeFirstOrThrow();
+}
+
+/**
+ * The earliest standing scene after `sceneId` that established an open fact still holding for the
+ * property, or null where nothing after that scene holds it: the scene the property moved on at.
+ */
+async function earliestLaterSceneHoldingTheProperty(database: Kysely<Database>, entryId: string, property: string, sceneId: string): Promise<string | null> {
+  const scene = await database.selectFrom('scenes').select('number').where('id', '=', sceneId).executeTakeFirstOrThrow();
+  const later = await database.selectFrom('facts')
+    .innerJoin('scenes', 'scenes.id', 'facts.from_scene_id')
+    .select('scenes.id')
+    .where('facts.entry_id', '=', entryId).where('facts.property', '=', property)
+    .where('facts.visibility', '=', 'open').where('facts.until_scene_id', 'is', null)
+    .where('scenes.status', '=', 'standing').where('scenes.number', '>', scene.number)
+    .orderBy('scenes.number').limit(1).executeTakeFirst();
+  return later?.id ?? null;
 }
 
 async function writeRuling(
@@ -334,10 +369,13 @@ async function writeScene(database: Kysely<Database>, run: RunRow, input: SceneI
       cautions.push(`"${entryInput.name.trim()}" already names an entry in this run, so it was not added again.`);
       continue;
     }
-    const takenBack = await entryAStruckTakeIntroduced(database, run.id, entryInput.name);
+    const takenBack = struck === null ? undefined : await entryTheStruckTakeIntroduced(database, struck.id, entryInput.name, entryInput.kind);
     if (takenBack !== undefined) {
-      const revived = await database.updateTable('entries').set({ introduced_in_scene_id: sceneId })
-        .where('id', '=', takenBack.id).returningAll().executeTakeFirstOrThrow();
+      const revived = await database.updateTable('entries').set({
+        introduced_in_scene_id: sceneId,
+        pronoun: entryInput.pronoun,
+        also_known_as: entryInput.alsoKnownAs.map((name) => name.trim()).filter((name) => name !== ''),
+      }).where('id', '=', takenBack.id).returningAll().executeTakeFirstOrThrow();
       names.add(withNameFields(revived));
       entriesAdded.push(entryFromRow(revived));
       continue;
@@ -370,7 +408,9 @@ async function writeScene(database: Kysely<Database>, run: RunRow, input: SceneI
   for (const factInput of input.facts) {
     const entry = names.resolve(factInput.entry, 'as the entry of a fact');
     const about = factInput.about === undefined ? null : names.resolve(factInput.about, 'as what a fact is about');
-    const holding = await holdingFacts(database, entry.id, factInput.property);
+    const property = normaliseProperty(factInput.property);
+    // A story cannot see the author-only lane, so a save neither matches, closes nor collides with it.
+    const holding = await holdingFacts(database, entry.id, property, 'open');
     const identical = holding.find((fact) => fact.value === factInput.value && fact.about_entry_id === (about?.id ?? null));
     if (identical !== undefined) {
       factsUnchanged += 1;
@@ -382,18 +422,18 @@ async function writeScene(database: Kysely<Database>, run: RunRow, input: SceneI
       const newestAuthorFact = authorFacts[authorFacts.length - 1];
       if (source === 'story' && newestAuthorFact !== undefined) {
         const collision = await database.insertInto('collisions').values({
-          id: randomUUID(), run_id: run.id, scene_id: sceneId, entry_id: entry.id, property: factInput.property,
+          id: randomUUID(), run_id: run.id, scene_id: sceneId, entry_id: entry.id, property,
           standing_fact_id: newestAuthorFact.id, proposed_value: factInput.value,
           proposed_about_entry_id: about?.id ?? null, state: 'waiting',
         }).returningAll().executeTakeFirstOrThrow();
         collisions.push(collisionFromRow(collision));
-        cautions.push(`The author stated ${entry.name}'s ${factInput.property}, so the story's "${factInput.value}" was kept as a collision for the author to decide.`);
+        cautions.push(`The author stated ${entry.name}'s ${property}, so the story's "${factInput.value}" was kept as a collision for the author to decide.`);
         continue;
       }
       await closeFacts(database, holding, sceneId, sceneId);
     }
     factsWritten.push(factFromRow(await insertFact(database, {
-      runId: run.id, entryId: entry.id, property: factInput.property, value: factInput.value,
+      runId: run.id, entryId: entry.id, property, value: factInput.value,
       aboutEntryId: about?.id ?? null, fromSceneId: sceneId, source, visibility: 'open',
       note: factInput.note, establishedBySceneId: sceneId,
     })));
@@ -448,7 +488,7 @@ async function writeScene(database: Kysely<Database>, run: RunRow, input: SceneI
       cautions.push(`The waypoint "${waypoint.text}" was reached already, so it was left as it was.`);
       continue;
     }
-    await database.updateTable('waypoints').set({ reached_in_scene_id: sceneId }).where('id', '=', waypoint.id).execute();
+    await database.updateTable('waypoints').set({ reached_in_scene_id: sceneId, reached_by_scene_id: sceneId }).where('id', '=', waypoint.id).execute();
   }
 
   if (input.legs.length > 0) {
@@ -465,13 +505,17 @@ async function writeScene(database: Kysely<Database>, run: RunRow, input: SceneI
   };
 }
 
-async function entryAStruckTakeIntroduced(database: Kysely<Database>, runId: string, name: string): Promise<EntryRow | undefined> {
-  const candidates = await database.selectFrom('entries')
-    .innerJoin('scenes', 'scenes.id', 'entries.introduced_in_scene_id')
-    .selectAll('entries')
-    .where('entries.run_id', '=', runId).where('scenes.status', '=', 'struck').where('entries.visibility', '=', 'open')
-    .orderBy('entries.written_order', 'desc').execute();
-  return new NameIndex(candidates.map(withNameFields)).find(name)[0];
+/**
+ * The entry the take being redone introduced under this very name and kind, which the new take
+ * may take up again rather than make a second of. Only the redo of that scene revives, and only on
+ * its primary name: an other name, another kind or a later scene makes a new entry, since the old
+ * row's name and kind would otherwise come back unasked.
+ */
+async function entryTheStruckTakeIntroduced(database: Kysely<Database>, struckId: string, name: string, kind: string): Promise<EntryRow | undefined> {
+  const candidates = await database.selectFrom('entries').selectAll()
+    .where('introduced_in_scene_id', '=', struckId).where('visibility', '=', 'open').where('kind', '=', kind)
+    .orderBy('written_order', 'desc').execute();
+  return candidates.find((candidate) => normaliseName(candidate.name) === normaliseName(name));
 }
 
 /** Takes back everything one take's save established. See the comment at the head of the file. */
@@ -487,6 +531,7 @@ async function strikeScene(database: Kysely<Database>, scene: SceneRow): Promise
       and not exists (
         select 1 from facts later
         where later.entry_id = facts.entry_id and later.property = facts.property
+          and later.visibility = facts.visibility
           and later.until_scene_id is null
           and later.established_by_scene_id is distinct from ${sceneId}
           and later.created_at > ${scene.created_at}
@@ -499,7 +544,10 @@ async function strikeScene(database: Kysely<Database>, scene: SceneRow): Promise
   await database.updateTable('threads')
     .set({ closed_in_scene_id: sceneId, closed_by_scene_id: sceneId, resolution: `Taken back when scene ${scene.number} was redone.` })
     .where('established_by_scene_id', '=', sceneId).execute();
-  await database.updateTable('waypoints').set({ reached_in_scene_id: null }).where('reached_in_scene_id', '=', sceneId).execute();
+  // Only what this scene's save reached is taken back. An import that only dated a waypoint here did
+  // not reach it by this take, and it stays reached as of the new take.
+  await database.updateTable('waypoints').set({ reached_in_scene_id: null, reached_by_scene_id: null })
+    .where('reached_by_scene_id', '=', sceneId).execute();
   await database.deleteFrom('collisions').where('scene_id', '=', sceneId).where('state', '=', 'waiting').execute();
 }
 
@@ -509,6 +557,8 @@ async function moveOutsideReferencesOntoTheNewTake(database: Kysely<Database>, s
   await database.updateTable('facts').set({ from_scene_id: newId }).where('from_scene_id', '=', struckId).where(notFromTheTake).execute();
   await database.updateTable('facts').set({ until_scene_id: newId }).where('until_scene_id', '=', struckId).where(notFromTheTake).execute();
   await database.updateTable('rulings').set({ scene_id: newId }).where('scene_id', '=', struckId).where(notFromTheTake).execute();
+  await database.updateTable('waypoints').set({ reached_in_scene_id: newId }).where('reached_in_scene_id', '=', struckId)
+    .where(sql<boolean>`reached_by_scene_id is distinct from ${struckId}`).execute();
 }
 
 /**

@@ -256,15 +256,44 @@ function readThreadSection(section: Section, read: StateRead, names: NameFinder)
   for (const stray of strays) read.unplaced.push(`state.md line ${stray.lineNumber}: a line among the threads that is not a bullet.`);
   for (const bullet of bullets) {
     const text = bullet.text.trim();
-    const closedMatch = /^(?:~~)?\s*(?:\*\*)?(closed|resolved|done)\b(?:\*\*)?\s*[:.\-–]?\s*([\s\S]*)$/i.exec(text);
+    const closure = closureOfThread(text);
     read.threads.push({
       text,
       about: names.namesMentionedIn(text),
       openedInScene: firstParentheticalSceneNumber(text),
-      closed: closedMatch !== null,
-      resolution: closedMatch ? (closedMatch[2] ?? '').replace(/~~/g, '').trim() : '',
+      closed: closure !== null,
+      resolution: closure ?? '',
     });
   }
+}
+
+const CLOSING_MARKER = '(?:closed|resolved|done)';
+
+/**
+ * Whether a thread bullet says it is closed, and if so its resolution. Three shapes count, each
+ * with bold and strike-through stripped first:
+ *
+ * - the marker opens the bullet ("Closed: ...", "**Done** ...");
+ * - the marker opens the text after a short leading label of at most sixty characters with no
+ *   sentence in it ("The debt: resolved; ..."), the resolution being the text after the marker;
+ * - the marker ends the bullet as a sentence of its own ("... found in the reeds. Closed."), the
+ *   resolution being everything before it.
+ *
+ * A marker inside a sentence ("is not resolved.", "was all done.") is never read as closing,
+ * because a negation or a passing remark reads exactly the same there.
+ */
+export function closureOfThread(bulletText: string): string | null {
+  const plain = bulletText.replace(/~~/g, '').replace(/\*\*/g, '').trim();
+  const leading = new RegExp(`^${CLOSING_MARKER}\\b\\s*[:.\\-–;,]?\\s*([\\s\\S]*)$`, 'i').exec(plain);
+  if (leading) return (leading[1] ?? '').trim();
+  const afterLabel = new RegExp(`^([^:.;!?\\n]{1,60}):\\s*${CLOSING_MARKER}\\b\\s*[:.\\-–;,]?\\s*([\\s\\S]*)$`, 'i').exec(plain);
+  if (afterLabel) {
+    const after = (afterLabel[2] ?? '').trim();
+    return after === '' ? (afterLabel[1] ?? '').trim() : after;
+  }
+  const ending = new RegExp(`(^|[.;:!?)]\\s+|^\\(\\s*)${CLOSING_MARKER}\\s*[.!]?\\s*\\)?$`, 'i').exec(plain);
+  if (ending) return plain.slice(0, ending.index + (ending[1] ?? '').length).trim();
+  return null;
 }
 
 function readWaypointSection(section: Section, read: StateRead): void {

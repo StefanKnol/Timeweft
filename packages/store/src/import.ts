@@ -7,9 +7,15 @@
  * of thousands of facts go in within seconds.
  *
  * Decisions the files cannot make for themselves:
- * - Facts are given oldest first within a property. Each one is closed at the scene of the next
- *   one along that has a known scene. Where no later one has a known scene, it is closed at the
- *   run's newest scene, since the files say a newer fact held by then.
+ * - A property's name is trimmed and lower-cased, so two spellings are one property.
+ * - A property whose name ends in " (each)" is additive: its facts stand alongside one another, so
+ *   none is closed by another and all of them hold.
+ * - Any other property is put in scene order before it is chained, whatever order the file gave.
+ *   The sort is stable, and a fact with no scene keeps its place after the dated fact before it in
+ *   the file (or first, where none comes before it): it is sorted as though it had that fact's
+ *   scene. Each fact is then closed at the scene of the next one along that has a known scene,
+ *   which in scene order is never earlier than its own. Where no later one has a known scene, it
+ *   is closed at the run's newest scene, since the files say a newer fact held by then.
  * - A trail note on a scene number the files do not have is a refusal naming it. Attaching it to
  *   the nearest scene would put it somewhere it never happened.
  * - A thread marked closed and a waypoint marked reached, with no scene saying when, are closed
@@ -21,7 +27,7 @@ import { randomUUID } from 'node:crypto';
 import type { Insertable, Kysely } from 'kysely';
 import { Refusal, type ImportedRun } from '@timeweft/contract';
 import type { Database, FactsTable, EntryNotesTable } from './database.ts';
-import { NameIndex, normaliseName } from './names.ts';
+import { NameIndex, normaliseName, normaliseProperty } from './names.ts';
 import { exactCount } from './checks.ts';
 
 /** Rows per insert, kept well under PostgreSQL's limit of 65,535 parameters in one statement. */
@@ -31,6 +37,24 @@ async function insertInBatches<Table extends keyof Database>(database: Kysely<Da
   for (let start = 0; start < rows.length; start += ROWS_PER_BATCH) {
     await database.insertInto(table).values(rows.slice(start, start + ROWS_PER_BATCH) as never).execute();
   }
+}
+
+/** A property named this way holds every fact given for it at once, rather than one replacing the last. */
+const ADDITIVE_PROPERTY_ENDING = ' (each)';
+
+/**
+ * The facts of one property in scene order, stably. A fact with no scene is sorted as though it had
+ * the scene of the dated fact before it in the file, so it stays just after that neighbour; one
+ * with no dated fact before it sorts first.
+ */
+function inSceneOrder<Fact extends { fromScene: number | null }>(facts: Fact[]): Fact[] {
+  let previousDatedScene = Number.NEGATIVE_INFINITY;
+  const keyed = facts.map((fact, position) => {
+    if (fact.fromScene !== null) previousDatedScene = fact.fromScene;
+    return { fact, position, key: fact.fromScene ?? previousDatedScene };
+  });
+  keyed.sort((left, right) => left.key - right.key || left.position - right.position);
+  return keyed.map((item) => item.fact);
 }
 
 export async function importRunInto(database: Kysely<Database>, imported: ImportedRun): Promise<void> {
@@ -102,16 +126,19 @@ export async function importRunInto(database: Kysely<Database>, imported: Import
     const entryRow = entryRows[entryPosition]!;
     const factsByProperty = new Map<string, typeof entry.facts>();
     for (const fact of entry.facts) {
-      const list = factsByProperty.get(fact.property) ?? [];
+      const property = normaliseProperty(fact.property);
+      const list = factsByProperty.get(property) ?? [];
       list.push(fact);
-      factsByProperty.set(fact.property, list);
+      factsByProperty.set(property, list);
     }
-    for (const [property, facts] of factsByProperty) {
+    for (const [property, fileOrder] of factsByProperty) {
+      const additive = property.endsWith(ADDITIVE_PROPERTY_ENDING);
+      const facts = additive ? fileOrder : inSceneOrder(fileOrder);
       facts.forEach((fact, index) => {
         const fromSceneId = sceneIdFor(fact.fromScene, `A fact on "${entry.name}"`);
         let untilSceneId: string | null = null;
         let closedBySceneId: string | null = null;
-        if (index < facts.length - 1) {
+        if (!additive && index < facts.length - 1) {
           const nextKnown = facts.slice(index + 1).find((later) => later.fromScene !== null && sceneIds.has(later.fromScene));
           if (nextKnown !== undefined) {
             untilSceneId = sceneIds.get(nextKnown.fromScene!)!;

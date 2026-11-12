@@ -160,11 +160,13 @@ describe('sceneInFull', () => {
     assert.deepEqual(full.factsEstablished.map((fact) => fact.id).sort(), ['fact-keeper-where-2', 'fact-lantern-held']);
     assert.deepEqual(full.notes.map((item) => item.id), ['note-keeper-3']);
     assert.deepEqual(full.threadsClosed.map((thread) => thread.id), ['thread-lantern']);
+    assert.deepEqual(full.legs.map((item) => item.id), ['leg-ford-mill'], 'the journeys first travelled in it');
   });
 
   it('answers the standing take where a struck take shares the number', () => {
     const full = sceneInFull(millerRun(), 2);
     assert.equal(full.scene.id, 'scene-2');
+    assert.deepEqual(full.legs.map((item) => item.id), ['leg-bank-market'], 'never the struck take\'s journey');
     assert.ok(!full.factsEstablished.some((fact) => fact.id === 'fact-keeper-struck'));
     assert.deepEqual(full.threadsOpened.map((thread) => thread.id), ['thread-flour']);
   });

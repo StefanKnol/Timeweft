@@ -4,8 +4,8 @@
  * builds runs of any size for the budget's property tests.
  */
 import type {
-  ClockRecord, EntryNoteRecord, EntryRecord, FactRecord, RulingRecord, RunSnapshot, SceneRecord, ThreadRecord,
-  WaypointRecord,
+  ClockRecord, EntryNoteRecord, EntryRecord, FactRecord, JourneyLegRecord, RulingRecord, RunSnapshot, SceneRecord,
+  ThreadRecord, WaypointRecord,
 } from '@timeweft/contract';
 
 const MOMENT = '2026-01-01T00:00:00.000Z';
@@ -54,6 +54,10 @@ export function thread(fields: Partial<ThreadRecord> & { id: string; text: strin
     runId: 'run-demo', aboutEntryIds: [], openedInSceneId: null, closedInSceneId: null, resolution: '',
     createdAt: MOMENT, ...fields,
   };
+}
+
+export function leg(fields: Partial<JourneyLegRecord> & { id: string; fromPlace: string; toPlace: string }): JourneyLegRecord {
+  return { runId: 'run-demo', duration: 'a day', note: '', sceneId: null, createdAt: MOMENT, ...fields };
 }
 
 /** The small run the readers are tested against. */
@@ -119,12 +123,20 @@ export function millerRun(): RunSnapshot {
     { id: 'waypoint-fair', runId: 'run-demo', text: 'The autumn fair at the ford.', reachedInSceneId: null, createdAt: MOMENT },
     { id: 'waypoint-reached', runId: 'run-demo', text: 'The ferry keeper is taken in.', reachedInSceneId: 'scene-3', createdAt: MOMENT },
   ];
+  const legs: JourneyLegRecord[] = [
+    leg({ id: 'leg-bank-market', fromPlace: 'the far bank', toPlace: 'the market town', duration: 'two days by cart',
+      sceneId: 'scene-2', createdAt: momentAfter(2) }),
+    leg({ id: 'leg-struck', fromPlace: 'The ford', toPlace: 'the far bank', duration: 'an hour by raft',
+      note: 'swept downstream', sceneId: 'scene-2-struck', createdAt: momentAfter(2) }),
+    leg({ id: 'leg-ford-mill', fromPlace: 'The ford', toPlace: 'The mill', duration: 'half a day on foot',
+      note: 'carrying the ferry keeper', sceneId: 'scene-3', createdAt: momentAfter(3) }),
+  ];
   return {
     run: {
       id: 'run-demo', slug: 'the-mill', title: 'The mill by the ford', setting: 'A river valley, the year after the flood.',
       status: 'binding', continuesRunId: null, register: 'Plain past tense. Close third person on the miller.', createdAt: MOMENT,
     },
-    clocks, scenes, entries, facts, notes, rulings, threads, waypoints, legs: [], collisions: [],
+    clocks, scenes, entries, facts, notes, rulings, threads, waypoints, legs, collisions: [],
   };
 }
 
@@ -158,6 +170,8 @@ export interface GeneratedRunOptions {
   threads: number;
   clocks: number;
   waypoints: number;
+  /** Journey legs, between the generated entries' names and a few places nobody names. */
+  legs?: number;
   /** One field of this many bytes, to prove a field larger than the whole budget is cut. */
   hugeField?: 'register' | 'situation' | 'title' | 'summary' | 'fact' | 'ruling';
   hugeFieldBytes?: number;
@@ -257,12 +271,22 @@ export function generateRun(options: GeneratedRunOptions): RunSnapshot {
     id: `waypoint-${waypointIndex}`, runId: 'run-gen', text: sentence(6),
     reachedInSceneId: random() < 0.3 ? (anyStanding()?.id ?? null) : null, createdAt: momentAfter(waypointIndex),
   }));
+  const legs: JourneyLegRecord[] = Array.from({ length: options.legs ?? 0 }, (_, legIndex) => {
+    const placeName = (): string => (entries.length > 0 && random() < 0.5 ? pick(entries).name : `the ${pick(WORDS)} road`);
+    const inStruck = struck.length > 0 && random() < 0.05;
+    return {
+      id: `leg-${legIndex}`, runId: 'run-gen', fromPlace: placeName(), toPlace: placeName(),
+      duration: inStruck ? `STRUCKTEXT leg ${legIndex}` : `${1 + Math.floor(random() * 9)} days`,
+      note: random() < 0.5 ? sentence(5) : '', sceneId: inStruck ? pick(struck).id : (anyStanding()?.id ?? null),
+      createdAt: momentAfter(legIndex),
+    };
+  });
   const snapshot: RunSnapshot = {
     run: {
       id: 'run-gen', slug: 'generated', title: `The ${pick(WORDS)} at the ${pick(WORDS)}`, setting: paragraph(2),
       status: random() < 0.5 ? 'binding' : 'telling', continuesRunId: null, register: paragraph(4), createdAt: MOMENT,
     },
-    clocks, scenes, entries, facts, notes, rulings, threads, waypoints, legs: [], collisions: [],
+    clocks, scenes, entries, facts, notes, rulings, threads, waypoints, legs, collisions: [],
   };
   const newest = standing[standing.length - 1];
   switch (options.hugeField) {
