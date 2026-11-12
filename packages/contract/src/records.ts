@@ -101,6 +101,12 @@ export type Source = (typeof SOURCES)[number];
 /**
  * Who a thing may be served to. `author-only` is never served to a chat writing a story, so it
  * can never shape a scene; the author's own pages show it.
+ *
+ * Author-only facts are a lane of their own. A story cannot see one, so a story's fact never
+ * closes one, never collides with one and is never compared with one; and stating one never
+ * closes an open fact, because the story would then see a value end with nothing in its place.
+ * On one property an open fact and an author-only fact may both hold: the story reads the open
+ * one, and the author's pages show both.
  */
 export const VISIBILITIES = ['open', 'author-only'] as const;
 export type Visibility = (typeof VISIBILITIES)[number];
@@ -130,7 +136,10 @@ export interface EntryRecord {
 export interface FactRecord {
   id: Id;
   entryId: Id;
-  /** What is being said: `who`, `standing`, `state`, `voice`, `where`, `what`, or any other. */
+  /**
+   * What is being said: `who`, `standing`, `state`, `voice`, `where`, `what`, or any other. Kept
+   * trimmed and in lower case, so `Where` and `where` are one property.
+   */
   property: string;
   value: string;
   /** Another entry the fact points at: who holds an item, where a person is. */
