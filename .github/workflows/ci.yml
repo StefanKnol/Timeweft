@@ -1,0 +1,29 @@
+name: check
+on:
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: timeweft
+          POSTGRES_PASSWORD: timeweft
+          POSTGRES_DB: timeweft_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U timeweft" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TIMEWEFT_TEST_DATABASE_URL: postgres://timeweft:timeweft@127.0.0.1:5432/timeweft_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm check-no-canon

@@ -1,0 +1,17 @@
+{
+  "name": "@timeweft/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types src/main.ts",
+    "import-run": "node --experimental-strip-types src/import-run-command.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@timeweft/briefing": "workspace:*",
+    "@timeweft/contract": "workspace:*",
+    "@timeweft/store": "workspace:*",
+    "@timeweft/weaver-files": "workspace:*",
+    "zod": "^3.25.0"
+  }
+}

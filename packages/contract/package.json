@@ -1,0 +1,7 @@
+{
+  "name": "@timeweft/contract",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "zod": "^3.25.0" }
+}
