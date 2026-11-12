@@ -46,9 +46,10 @@ test('a story snapshot holds nothing author-only, and the author snapshot holds 
     { entry: 'Wren the baker', property: 'secret', value: 'nothing' },
     { entry: 'Wren the baker', property: 'kin', value: 'nobody' },
   ] }));
-  assert.equal(saved.collisions.length, 1, 'only the open author fact collides; the author-only lane is out of a story\'s sight');
-  assert.equal(saved.collisions[0]!.property, 'kin');
-  assert.deepEqual(saved.factsWritten.map((fact) => [fact.property, fact.value, fact.visibility]), [['secret', 'nothing', 'open']]);
+  // The author-only lane is out of a story's sight, and so is the open fact about the author-only
+  // cellar, since a story is never served it: neither collides, and both of the story's are written.
+  assert.equal(saved.collisions.length, 0, 'a collision would hand the story the id of a fact it is never served');
+  assert.deepEqual(saved.factsWritten.map((fact) => [fact.property, fact.value, fact.visibility]), [['secret', 'nothing', 'open'], ['kin', 'nobody', 'open']]);
 
   const story = await store.snapshotOf(slug, 'story');
   const author = await store.snapshotOf(slug, 'author');
@@ -58,7 +59,7 @@ test('a story snapshot holds nothing author-only, and the author snapshot holds 
   const hiddenId = author.entries.find((entry) => entry.visibility === 'author-only')!.id;
   assert.ok(!JSON.stringify(story).includes(hiddenId), 'no id of the hidden entry reaches the story');
   assert.equal(story.collisions.length, 0);
-  assert.equal(author.collisions.length, 1);
+  assert.equal(author.collisions.length, 0);
   assert.equal(story.rulings[0]!.aboutEntryIds.length, 1);
   assert.equal(story.threads[0]!.aboutEntryIds.length, 1);
   assert.equal(story.scenes[0]!.placeEntryId, null);

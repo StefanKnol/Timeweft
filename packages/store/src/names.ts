@@ -61,9 +61,12 @@ function twoAnswerTo(name: string, holders: NameableEntry[], where: string): str
 }
 
 /**
- * A property as the store keeps it: trimmed and in lower case, so `Where` and `where` are one
- * property. Every door that takes a property passes it through here before storing or comparing.
+ * A property as the store keeps it, spelled as a name is matched: composed (NFC), trimmed, every
+ * run of whitespace inside it one space, and in lower case. So `Where`, `where` and `where ` are
+ * one property, and so are two spellings of one accented letter. Every door that takes a property
+ * passes it through here before storing or comparing, and migration 3 brings older rows in line
+ * with the same steps in SQL.
  */
 export function normaliseProperty(property: string): string {
-  return property.trim().toLowerCase();
+  return normaliseName(property);
 }

@@ -155,3 +155,19 @@ test('a struck entry is not revived by another kind, by one of its other names, 
   const later = await store.saveScene(sceneInput({ run: slug, entries: [{ name: 'the bridge', kind: 'place' }] }));
   assert.ok(!struckIds.includes(later.entriesAdded[0]!.id), 'a later scene revived a struck row');
 });
+
+test('a redo moves a thread an import closed as of the redone scene onto the new take', async () => {
+  const slug = 'redo-imported-thread';
+  const oneScene = (number: number) => ({ number, title: `Scene ${number}`, starred: false, whenTyped: `day ${number}`, place: null, summary: 'x', record: '', steer: '', situationAfter: '', readings: [] });
+  await store.importRun({
+    slug, title: 'The Ford', setting: '', status: 'binding', register: '', clocks: [],
+    scenes: [oneScene(1), oneScene(2)],
+    entries: [], rulings: [], waypoints: [], legs: [], unplaced: [],
+    threads: [{ text: 'Will the ferry hold?', about: [], openedInScene: 1, closed: true, resolution: 'It held.' }],
+  });
+  const redone = await store.redoScene(redoInput({ run: slug, number: 2 }));
+  const story = await store.snapshotOf(slug, 'story');
+  // The import only dated the closing to the newest scene; it did not close it by that scene's save.
+  // So it stays closed, as of the take that now stands there, and never points at the struck one.
+  assert.deepEqual(story.threads.map((thread) => [thread.closedInSceneId, thread.resolution]), [[redone.scene.id, 'It held.']]);
+});

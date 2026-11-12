@@ -40,6 +40,63 @@ export function scenesByNumber(scenes: SceneRecord[]): SceneSlot[] {
   return [...slotsByNumber.values()].sort((first, second) => first.number - second.number);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Drawing a long list a step at a time
+
+/**
+ * Scenes drawn at once before "Show older" is needed. A long run holds hundreds, and drawing every
+ * one put hundreds of thousands of characters on one page; fifty is what a reader scrolls back
+ * through before they would rather search.
+ */
+export const SCENES_SHOWN_AT_A_TIME = 50;
+
+/** Rulings drawn at once. A ruling is shorter than a scene card, so a step holds more of them. */
+export const RULINGS_SHOWN_AT_A_TIME = 100;
+
+/** The newest of a list, and what is left older than them. */
+export interface NewestShown<Item> {
+  /** The newest items, kept in the list's own order, oldest of them first. */
+  shown: Item[];
+  /** How many older items are not drawn. */
+  olderNotShown: number;
+  /** How many one press of "Show older" would add: a step, or what is left where less is. */
+  showOlderWouldAdd: number;
+}
+
+/**
+ * The newest `shownCount` items of a list in oldest-first order. The list is everything that
+ * matches (a filter searches all of it first), so only the drawing is cut, never the search.
+ */
+export function newestShown<Item>(oldestFirst: readonly Item[], shownCount: number, step: number): NewestShown<Item> {
+  const countShown = Math.max(0, Math.min(oldestFirst.length, Math.floor(shownCount)));
+  const olderNotShown = oldestFirst.length - countShown;
+  return {
+    shown: oldestFirst.slice(olderNotShown),
+    olderNotShown,
+    showOlderWouldAdd: Math.min(olderNotShown, step),
+  };
+}
+
+/** How many are drawn after "Show older": one step more, never more than there are. */
+export function shownAfterShowingOlder(shownCount: number, step: number, totalCount: number): number {
+  return Math.min(totalCount, shownCount + step);
+}
+
+/** The rulings a filter finds, and the newest of them to draw. */
+export interface RulingsToDraw extends NewestShown<RulingRecord> {
+  /** Every ruling the filter matches, drawn or not. */
+  matchingCount: number;
+}
+
+/**
+ * The filter runs over every ruling first, and only then is the drawing cut to the newest, so a
+ * ruling older than the drawn step is still found by searching for it.
+ */
+export function rulingsToDraw(rulings: RulingRecord[], filterText: string, shownCount: number): RulingsToDraw {
+  const matching = rulingsMatching(rulings, filterText);
+  return { matchingCount: matching.length, ...newestShown(matching, shownCount, RULINGS_SHOWN_AT_A_TIME) };
+}
+
 /** Scene ids to their numbers, so a fact can say which scene it held from. */
 export function sceneNumbersById(scenes: SceneRecord[]): Map<Id, number> {
   return new Map(scenes.map((scene) => [scene.id, scene.number]));

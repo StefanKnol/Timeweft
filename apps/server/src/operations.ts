@@ -23,7 +23,7 @@ type Handler<Name extends OperationName> = (store: Store, input: InputOf<Name>) 
  * the caller. That is what keeps a story operation from ever seeing author-only material: the
  * store filters by audience where it reads.
  */
-function snapshotForOperation(store: Store, name: OperationName, runSlug: string): Promise<RunSnapshot> {
+export function snapshotForOperation(store: Store, name: OperationName, runSlug: string): Promise<RunSnapshot> {
   return store.snapshotOf(runSlug, OPERATIONS[name].audience);
 }
 
@@ -101,12 +101,21 @@ export function inputRefusalSentence(name: OperationName, error: ZodError): stri
 export async function runOperation<Name extends OperationName>(
   store: Store, name: Name, rawInput: unknown, audienceAllowed: Audience,
 ): Promise<AnswerByOperation[Name]> {
+  const handler = OPERATION_HANDLERS[name] as Handler<Name>;
+  return handler(store, parseOperationInput(name, rawInput, audienceAllowed));
+}
+
+/**
+ * The one check every caller's input goes through: who may run the operation, and the input
+ * parsed with the operation's own schema. A face that needs the parsed input before running
+ * (the MCP briefing, sized to its whole tool result) asks this rather than parsing again.
+ */
+export function parseOperationInput<Name extends OperationName>(name: Name, rawInput: unknown, audienceAllowed: Audience): InputOf<Name> {
   const definition = OPERATIONS[name];
   if (definition.audience === 'author' && audienceAllowed !== 'author') {
     throw new Refusal(`${name} is the author's alone, and this caller is a story.`);
   }
   const parsed = definition.input.safeParse(rawInput ?? {});
   if (!parsed.success) throw new Refusal(inputRefusalSentence(name, parsed.error));
-  const handler = OPERATION_HANDLERS[name] as Handler<Name>;
-  return handler(store, parsed.data as InputOf<Name>);
+  return parsed.data as InputOf<Name>;
 }

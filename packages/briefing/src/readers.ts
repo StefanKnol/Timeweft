@@ -13,7 +13,7 @@ import type {
 } from '@timeweft/contract';
 import {
   closedFactsOf, compareText, entryNameOf, holdingFactsOf, indexRun, rulingsInForce, sceneNumberOf,
-  servableThreads, trailNewestFirstOf,
+  servableThreads, trailNewestFirstOf, wasEstablishedInAStruckScene,
 } from './run-index.ts';
 import type { RunIndex } from './run-index.ts';
 import { onOneLine } from './text-fitting.ts';
@@ -107,7 +107,7 @@ function firstExcerpt(fields: string[], needle: string): string | null {
 
 /**
  * Searches the run for a word or phrase, case-blind: names, facts, trail notes, standing scenes,
- * rulings in force and threads, in that order, at most `limit` of them. Nothing from a struck scene.
+ * journeys, rulings in force and threads, in that order, at most `limit` of them. Nothing from a struck scene.
  */
 export function findInRun(snapshot: RunSnapshot, text: string, limit: number): FoundItem[] {
   const needle = onOneLine(text).toLowerCase();
@@ -151,6 +151,18 @@ export function findInRun(snapshot: RunSnapshot, text: string, limit: number): F
   for (const scene of [...index.standingScenes].reverse()) {
     const excerpt = firstExcerpt([scene.title, scene.whenTyped, scene.summary, scene.situationAfter, scene.record, scene.steer], needle);
     if (excerpt !== null && !add({ kind: 'scene', text: `Scene ${scene.number}, "${scene.title}": ${excerpt}`, entryName: null, sceneNumber: scene.number })) return found;
+  }
+  // A journey has no kind of its own in FoundItem, and the contract is not this package's to change,
+  // so it is answered as a note, its text saying it is a journey. Without this a journey tied to no
+  // scene could be left out of a briefing with nothing anywhere that fetches it.
+  const legs = snapshot.legs
+    .filter((leg) => !wasEstablishedInAStruckScene(index, leg.sceneId))
+    .sort((left, right) => compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id));
+  for (const leg of legs) {
+    if (firstExcerpt([leg.fromPlace, leg.toPlace, leg.duration, leg.note], needle) === null) continue;
+    const legNote = leg.note.trim().length > 0 ? ` (${onOneLine(leg.note)})` : '';
+    const legText = `Journey: ${onOneLine(leg.fromPlace)} to ${onOneLine(leg.toPlace)}: ${onOneLine(leg.duration)}${legNote}`;
+    if (!add({ kind: 'note', text: legText, entryName: null, sceneNumber: sceneNumberOf(index, leg.sceneId) })) return found;
   }
   for (const ruling of rulingsInForce(index)) {
     const excerpt = firstExcerpt([ruling.text, ruling.topics.join(', ')], needle);

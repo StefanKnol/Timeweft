@@ -217,19 +217,42 @@ const stackedHistoryMarker = /(?<=[.;!?)"”’]\s+)(?:Before that|Before|Earlie
  * is trusted.
  */
 export function splitStackedHistory(text: string, options: { presentSceneWhereUndated?: number | null } = {}): string[] {
+  const split = splitStackedHistoryDated(text, options);
+  return [[split.present, ...split.keptWithThePresent].join(' '), ...split.olderNewestFirst];
+}
+
+/** A field's stacked history, with the present's own scene kept apart from what is kept with it. */
+export interface StackedHistory {
+  /** The present as its own text, before the first history marker. */
+  present: string;
+  /**
+   * The present's own scene: the one its text gives, or `presentSceneWhereUndated`. A segment kept
+   * with the present never dates it, since that would date the present by something said later
+   * and keep the value before it holding until then.
+   */
+  presentScene: number | null;
+  /** Segments after a marker that date themselves after the present, in the order written. */
+  keptWithThePresent: string[];
+  olderNewestFirst: string[];
+}
+
+export function splitStackedHistoryDated(text: string, options: { presentSceneWhereUndated?: number | null } = {}): StackedHistory {
   const segments = text.split(stackedHistoryMarker).map((segment) => segment.trim()).filter((segment) => segment !== '');
-  if (segments.length === 0) return [text.trim()];
+  if (segments.length === 0) {
+    const present = text.trim();
+    return { present, presentScene: sceneEndingSegment(present) ?? options.presentSceneWhereUndated ?? null, keptWithThePresent: [], olderNewestFirst: [] };
+  }
   const [present = '', ...olderParts] = segments;
   const older = olderParts.flatMap(splitAtLabelledClauses);
   const presentScene = sceneEndingSegment(present) ?? options.presentSceneWhereUndated ?? null;
   const keptWithThePresent: string[] = [];
-  const reallyOlder: string[] = [];
+  const olderNewestFirst: string[] = [];
   for (const segment of older) {
     const scene = sceneEndingSegment(segment);
     if (presentScene !== null && scene !== null && scene > presentScene) keptWithThePresent.push(segment);
-    else reallyOlder.push(segment);
+    else olderNewestFirst.push(segment);
   }
-  return [[present, ...keptWithThePresent].join(' '), ...reallyOlder];
+  return { present, presentScene, keptWithThePresent, olderNewestFirst };
 }
 
 const sentenceStartPattern = /(?<=[.;!?)"”’]\s+)\S/g;

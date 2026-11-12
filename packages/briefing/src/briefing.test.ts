@@ -140,7 +140,8 @@ describe('the budget', () => {
   });
 
   it('passes room an earlier section did not use on to a later one', () => {
-    const snapshot = generateRun({ scenes: 2, entries: 0, factsPerEntry: 0, notesPerEntry: 0, rulings: 0, threads: 0, clocks: 0, waypoints: 0, seed: 8, hugeField: 'summary' });
+    // Many scenes rather than one huge summary: a summary is served as its first sentences now.
+    const snapshot = generateRun({ scenes: 200, entries: 0, factsPerEntry: 0, notesPerEntry: 0, rulings: 0, threads: 0, clocks: 0, waypoints: 0, seed: 8 });
     const briefing = buildBriefing(snapshot, { upcoming: [], budgetBytes: 20_000 });
     assert.ok(sectionNamed(briefing, 'The last scenes').bytes > 15_000, 'the last scenes take the room nobody else needed');
   });
@@ -188,8 +189,8 @@ describe('what the briefing never serves', () => {
 describe('the sections', () => {
   it('says the clocks at the newest standing scene that carries a reading', () => {
     const text = buildBriefing(millerRun(), { upcoming: [], budgetBytes: 20_000 }).text;
-    assert.ok(text.includes('- Days since the flood (the night the river rose): 3, dusk, at scene 2.'));
-    assert.ok(text.includes('- Days at the mill (the miller taking the ferry keeper in): 1, at scene 3.'));
+    assert.ok(text.includes('- Days since the flood: 3, dusk, at scene 2. Counts from: the night the river rose\n'));
+    assert.ok(text.includes('- Days at the mill: 1, at scene 3. Counts from: the miller taking the ferry keeper in\n'));
   });
 
   it('says where things stand from the newest standing scene', () => {
@@ -201,9 +202,9 @@ describe('the sections', () => {
   it('serves each upcoming entry with what holds now and its latest trail', () => {
     const page = sectionTextOf(buildBriefing(millerRun(), { upcoming: ['the ferry keeper'], budgetBytes: 20_000 }), 'On the page next');
     assert.ok(page.includes('### Bram (person, he), also the ferry keeper'));
-    assert.ok(page.includes('- where: in the mill loft (The mill)'));
-    assert.ok(page.includes('- standing: grateful to the miller (Wenna the miller)'));
-    assert.ok(!page.includes('- where: at the ford'), 'the closed fact is history, not the present');
+    assert.ok(page.includes('- where (since scene 3): in the mill loft (The mill)'));
+    assert.ok(page.includes('- standing (since scene 2): grateful to the miller (Wenna the miller)'));
+    assert.ok(!page.includes(': at the ford'), 'the closed fact is history, not the present');
     assert.ok(page.includes('- Trail, scene 3: Climbed to the loft to sleep.'));
     assert.ok(!page.includes('Dropped the lantern'), 'a note from a struck scene is never served');
   });
@@ -214,19 +215,20 @@ describe('the sections', () => {
     assert.ok(page.includes('Ferry (item)') && page.includes('The old raft (item)'));
   });
 
-  it('uses the newest scene\'s place, facts and notes when nothing upcoming is named', () => {
+  it('weighs who was present in the newest scenes when nothing upcoming is named, the longest trail first', () => {
     const page = sectionTextOf(buildBriefing(millerRun(), { upcoming: [], budgetBytes: 20_000 }), 'On the page next');
-    const order = ['### The mill', '### Bram', '### The lantern'].map((heading) => page.indexOf(heading));
-    assert.ok(order.every((at) => at >= 0), 'the place, the keeper and the lantern are all there');
-    assert.deepEqual([...order].sort((left, right) => left - right), order, 'the place comes first');
-    assert.ok(!page.includes('### Wenna the miller'), 'the newest scene did not touch the miller');
+    const order = ['### Bram', '### The lantern', '### The mill', '### The ford', '### Wenna the miller'].map((heading) => page.indexOf(heading));
+    assert.ok(order.every((at) => at >= 0), 'everyone present in the last scenes is there');
+    assert.deepEqual([...order].sort((left, right) => left - right), order,
+      'the keeper, with the longest trail, then the newest scene\'s, then the older scenes\'');
+    assert.ok(!page.includes('### Ferry'), 'nothing that was not present is chosen');
   });
 
-  it('serves rulings about the upcoming entries first, then narration', () => {
+  it('serves the author\'s narration rulings first, then rulings about the upcoming entries', () => {
     const rulings = sectionTextOf(buildBriefing(millerRun(), { upcoming: ['Bram'], budgetBytes: 20_000 }), 'Rulings that bear');
     const aboutKeeper = rulings.indexOf('The ferry keeper never swims.');
     const narration = rulings.indexOf('Tell it in the past tense, close on the miller.');
-    assert.ok(aboutKeeper >= 0 && narration > aboutKeeper);
+    assert.ok(narration >= 0 && aboutKeeper > narration);
   });
 
   it('serves threads touching the upcoming entries first', () => {
@@ -422,7 +424,7 @@ describe('the faults found on review', () => {
     assert.ok(sectionNamed(briefing, 'On the page next').leftOut > 0, 'not every fact fits at this size');
     assert.ok(page.includes('- Trail, scene 3: Climbed to the loft to sleep.'), page);
     assert.ok(page.includes('- Trail, scene 2: Mended the ferry rope.'));
-    assert.ok(page.includes('- who: grinds grain for the valley'), 'the other name is not starved');
+    assert.ok(page.includes('- who (since scene 1): grinds grain for the valley'), 'the other name is not starved');
   });
 
   it('serves a ruling before any old scene summary whenever the budget allows one', () => {

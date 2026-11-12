@@ -304,3 +304,119 @@ export function generateRun(options: GeneratedRunOptions): RunSnapshot {
   }
   return snapshot;
 }
+
+/* ---------------------------------------------------------------- a long run */
+
+/** The one entry of a long run who is in every scene: the one the story is told through. */
+export const LONG_RUN_POINT_OF_VIEW_ID = 'entry-baker';
+
+/**
+ * A long run shaped like a story kept for hundreds of scenes: one entry, the baker, has a trail
+ * note in every scene; a few early facts about the baker were never replaced; the newest scenes
+ * coin many small things, each with a world ruling; the author's standing instructions about how
+ * the run is told are old and few; one clock's description has grown by stacking; some journeys
+ * were never tied to a scene; and scene summaries are long. Every word is the demo world's.
+ */
+export function generateLongRun(options: { seed: number; scenes: number }): RunSnapshot {
+  const random = seededRandom(options.seed);
+  const pick = <Item>(items: readonly Item[]): Item => items[Math.floor(random() * items.length)] as Item;
+  const sentence = (wordCount: number): string => {
+    const words = Array.from({ length: wordCount }, () => pick(WORDS));
+    return `${words.join(' ')}.`.replace(/^./, (first) => first.toUpperCase());
+  };
+  const paragraph = (sentenceCount: number): string =>
+    Array.from({ length: sentenceCount }, () => sentence(6 + Math.floor(random() * 8))).join(' ');
+
+  const clocks: ClockRecord[] = [
+    { id: 'clock-burned', runId: 'run-long', name: 'Days since the mill burned',
+      countsFrom: Array.from({ length: 30 }, (_, layer) => `Layer ${layer + 1}: the count was taken up again after the ${pick(WORDS)} ${pick(WORDS)}.`).join(' ') },
+    { id: 'clock-season', runId: 'run-long', name: 'Weeks of the harvest', countsFrom: 'the first sheaf cut' },
+  ];
+  const scenes: SceneRecord[] = [];
+  for (let number = 1; number <= options.scenes; number += 1) {
+    scenes.push(scene({
+      id: `scene-${number}`, number, runId: 'run-long', title: `The ${pick(WORDS)} ${number}`, starred: random() < 0.1,
+      whenTyped: `day ${number}`, summary: paragraph(10 + Math.floor(random() * 10)), situationAfter: paragraph(3),
+      readings: [{ clockId: 'clock-burned', count: String(number), partOfDay: 'dusk' }],
+      createdAt: momentAfter(number * 10),
+    }));
+  }
+  const baker = entry({ id: LONG_RUN_POINT_OF_VIEW_ID, runId: 'run-long', name: 'Ada the baker', pronoun: 'she', introducedInSceneId: 'scene-1' });
+  const regulars = Array.from({ length: 20 }, (_, regularIndex) => entry({
+    id: `entry-regular-${regularIndex}`, runId: 'run-long', name: `${pick(WORDS)} hand ${regularIndex}`,
+  }));
+  const coined = Array.from({ length: 40 }, (_, coinedIndex) => entry({
+    id: `entry-coined-${coinedIndex}`, runId: 'run-long', name: `the ${pick(WORDS)} charm ${coinedIndex}`, kind: 'item',
+  }));
+  const entries = [baker, ...regulars, ...coined];
+  const facts: FactRecord[] = [];
+  const notes: EntryNoteRecord[] = [];
+  let counter = 0;
+  const nextMoment = (): string => { counter += 1; return momentAfter(counter); };
+  // Early facts about the baker, never replaced, and a few newer ones.
+  for (const [property, value, from] of [
+    ['state', 'a stranger in the valley whom nobody trusts', 'scene-2'],
+    ['standing', 'owes the mill a winter of bread', 'scene-3'],
+    ['where', 'at the bakehouse by the ford', 'scene-5'],
+  ] as const) {
+    facts.push(fact({ id: `fact-baker-${property}`, entryId: baker.id, property, value, fromSceneId: from, createdAt: nextMoment() }));
+  }
+  facts.push(fact({ id: 'fact-baker-who', entryId: baker.id, property: 'who', value: 'the valley baker', createdAt: nextMoment() }));
+  // Newer facts, but none in the newest scene: there the baker has only a trail note.
+  for (let number = options.scenes - 5; number < options.scenes; number += 1) {
+    if (number < 1) continue;
+    facts.push(fact({ id: `fact-baker-late-${number}`, entryId: baker.id, property: `mood ${number}`, value: sentence(6), fromSceneId: `scene-${number}`, createdAt: nextMoment() }));
+  }
+  for (const item of scenes) {
+    notes.push(note({ id: `note-baker-${item.number}`, entryId: baker.id, sceneId: item.id, text: paragraph(1), createdAt: nextMoment() }));
+    for (const regular of regulars) {
+      if (random() < 0.15) notes.push(note({ id: `note-${regular.id}-${item.number}`, entryId: regular.id, sceneId: item.id, text: sentence(10), createdAt: nextMoment() }));
+    }
+  }
+  for (const regular of regulars) {
+    for (let factIndex = 0; factIndex < 4; factIndex += 1) {
+      facts.push(fact({ id: `fact-${regular.id}-${factIndex}`, entryId: regular.id, property: pick(['where', 'state', 'standing']) + factIndex,
+        value: sentence(7), fromSceneId: `scene-${1 + Math.floor(random() * options.scenes)}`, createdAt: nextMoment() }));
+    }
+  }
+  // The newest scene coins many small things: a fact each, and a world ruling each.
+  const newest = scenes[scenes.length - 1];
+  const rulings: RulingRecord[] = [];
+  let rulingNumber = 0;
+  const addRuling = (fields: Partial<RulingRecord> & { text: string }): void => {
+    rulingNumber += 1;
+    rulings.push(ruling({ id: `ruling-${rulingNumber}`, number: rulingNumber, runId: 'run-long', ...fields }));
+  };
+  addRuling({ text: 'Tell it in the past tense, close on the baker, never inside anyone else.', topics: ['narration', 'point of view'], sceneId: 'scene-1' });
+  addRuling({ text: 'Keep the narration plain: no long lists, and every scene ends on the baker.', topics: ['narration'], sceneId: 'scene-1' });
+  for (let practice = 0; practice < 40; practice += 1) {
+    addRuling({ text: `Practice ${practice + 1}. ${sentence(12)}`, topics: [pick(['time', 'practice', 'naming'])], sceneId: `scene-${1 + practice}` });
+  }
+  for (let worldIndex = 0; worldIndex < 700; worldIndex += 1) {
+    const sceneNumber = Math.min(options.scenes, 1 + Math.floor((worldIndex * options.scenes) / 700));
+    const about = worldIndex >= 660 ? coined[worldIndex - 660] : pick(coined);
+    addRuling({ text: `It is so in the world: ${sentence(14)}`, source: 'story', scope: 'world', topics: ['coined'],
+      aboutEntryIds: about ? [about.id] : [], sceneId: `scene-${sceneNumber}` });
+  }
+  if (newest) {
+    for (const item of coined) {
+      facts.push(fact({ id: `fact-${item.id}`, entryId: item.id, property: 'what', value: sentence(8), fromSceneId: newest.id, source: 'story', createdAt: nextMoment() }));
+    }
+  }
+  const threads: ThreadRecord[] = Array.from({ length: 60 }, (_, threadIndex) => thread({
+    id: `thread-${threadIndex}`, runId: 'run-long', text: sentence(9), openedInSceneId: `scene-${1 + Math.floor(random() * options.scenes)}`,
+    aboutEntryIds: random() < 0.5 ? [pick(entries).id] : [], createdAt: nextMoment(),
+  }));
+  const legs: JourneyLegRecord[] = Array.from({ length: 30 }, (_, legIndex) => leg({
+    id: `leg-${legIndex}`, runId: 'run-long', fromPlace: `the ${pick(WORDS)} road`, toPlace: `the ${pick(WORDS)} gate`,
+    duration: `${1 + legIndex} days`, sceneId: legIndex % 3 === 0 ? null : `scene-${1 + Math.floor(random() * options.scenes)}`,
+    note: legIndex % 2 === 0 ? 'by cart' : '', createdAt: momentAfter(legIndex),
+  }));
+  return {
+    run: {
+      id: 'run-long', slug: 'the-bakehouse', title: 'The bakehouse by the ford', setting: paragraph(2),
+      status: 'binding', continuesRunId: null, register: paragraph(4), createdAt: MOMENT,
+    },
+    clocks, scenes, entries, facts, notes, rulings, threads, waypoints: [], legs, collisions: [],
+  };
+}

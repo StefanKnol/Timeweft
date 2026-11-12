@@ -194,6 +194,14 @@ export class PostgresStore implements Store {
         // otherwise was written before that rule, and is not acted on.
         throw new Refusal('That collision stood against an author-only fact, which a story never meets. Keep the author\'s instead.');
       }
+      if (standingFact.about_entry_id !== null) {
+        // An open fact about an author-only entry is as unseen by a story as an author-only fact, so a
+        // collision with it is a row from before that rule too, and is refused for the same reason.
+        const about = await transaction.selectFrom('entries').select('visibility').where('id', '=', standingFact.about_entry_id).executeTakeFirstOrThrow();
+        if (about.visibility !== 'open') {
+          throw new Refusal('That collision stood against a fact about an author-only entry, which a story never meets. Keep the author\'s instead.');
+        }
+      }
       if (standingFact.until_scene_id !== null) {
         throw new Refusal('The author\'s fact that collision stood against has been replaced since, so the story\'s cannot be taken in its place. Keep the author\'s instead.');
       }
@@ -263,6 +271,28 @@ async function holdingFacts(database: Kysely<Database>, entryId: string, propert
     .where('entry_id', '=', entryId).where('until_scene_id', 'is', null)
     .where('property', '=', property).where('visibility', '=', visibility)
     .orderBy('written_order').execute();
+}
+
+/**
+ * The facts holding for one property of one entry that a story is served: open, and about nothing
+ * or about an entry a story may name. An open fact about an author-only entry is dropped from every
+ * story snapshot (see `filterForStory`), so to a story's doors it must be as absent as an
+ * author-only fact: never matched, never closed, never collided with. A collision would hand the
+ * story the id of a fact it is never shown.
+ */
+async function holdingFactsAStorySees(database: Kysely<Database>, entryId: string, property: string): Promise<FactRow[]> {
+  const holding = await holdingFacts(database, entryId, property, 'open');
+  const aboutIds = uniqueIds(holding.map((fact) => fact.about_entry_id).filter((id): id is string => id !== null));
+  if (aboutIds.length === 0) return holding;
+  // The same test `liveEntryIndex` makes for a story: open, and not introduced by a struck take.
+  const served = await database.selectFrom('entries')
+    .leftJoin('scenes', 'scenes.id', 'entries.introduced_in_scene_id')
+    .select('entries.id')
+    .where('entries.id', 'in', aboutIds).where('entries.visibility', '=', 'open')
+    .where((where) => where.or([where('scenes.id', 'is', null), where('scenes.status', '=', 'standing')]))
+    .execute();
+  const servedIds = new Set(served.map((row) => row.id));
+  return holding.filter((fact) => fact.about_entry_id === null || servedIds.has(fact.about_entry_id));
 }
 
 async function closeFacts(database: Kysely<Database>, facts: FactRow[], untilSceneId: string, closedBySceneId: string | null): Promise<void> {
@@ -409,8 +439,9 @@ async function writeScene(database: Kysely<Database>, run: RunRow, input: SceneI
     const entry = names.resolve(factInput.entry, 'as the entry of a fact');
     const about = factInput.about === undefined ? null : names.resolve(factInput.about, 'as what a fact is about');
     const property = normaliseProperty(factInput.property);
-    // A story cannot see the author-only lane, so a save neither matches, closes nor collides with it.
-    const holding = await holdingFacts(database, entry.id, property, 'open');
+    // A story cannot see the author-only lane, nor an open fact about an author-only entry, so a save
+    // neither matches, closes nor collides with either.
+    const holding = await holdingFactsAStorySees(database, entry.id, property);
     const identical = holding.find((fact) => fact.value === factInput.value && fact.about_entry_id === (about?.id ?? null));
     if (identical !== undefined) {
       factsUnchanged += 1;
@@ -559,6 +590,11 @@ async function moveOutsideReferencesOntoTheNewTake(database: Kysely<Database>, s
   await database.updateTable('rulings').set({ scene_id: newId }).where('scene_id', '=', struckId).where(notFromTheTake).execute();
   await database.updateTable('waypoints').set({ reached_in_scene_id: newId }).where('reached_in_scene_id', '=', struckId)
     .where(sql<boolean>`reached_by_scene_id is distinct from ${struckId}`).execute();
+  // A thread an import closed only dated to the struck scene was not closed by its save, so it stays
+  // closed as of the new take. One the take closed or opened has been settled by strikeScene already,
+  // and carries the struck scene as its closer, which is what this leaves alone.
+  await database.updateTable('threads').set({ closed_in_scene_id: newId }).where('closed_in_scene_id', '=', struckId)
+    .where(sql<boolean>`closed_by_scene_id is distinct from ${struckId}`).execute();
 }
 
 /**

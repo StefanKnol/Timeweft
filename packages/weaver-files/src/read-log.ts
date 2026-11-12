@@ -13,14 +13,18 @@ export interface LogRead {
   unplaced: string[];
 }
 
-/** The longest a summary may run before it is cut back to whole sentences. */
-export const SUMMARY_LIMIT_CHARACTERS = 600;
+/**
+ * The longest a summary may run before it is cut back to whole sentences. A late scene's first
+ * paragraph runs long, and at 600 characters the summary read as a transcript of the scene; about
+ * two or three sentences is what a summary is for. The whole prose stays in the record.
+ */
+export const SUMMARY_LIMIT_CHARACTERS = 320;
 
 const STAR_PATTERN = /\s*[★⭐☆✦]+\s*$/;
 
 /**
  * The summary is the first paragraph of the scene's prose (the lines before the first blank line
- * or the first "> " line). Where that paragraph runs past 600 characters it is cut back to the
+ * or the first "> " line). Where that paragraph runs past the limit it is cut back to the
  * whole sentences that fit; where even the first sentence does not fit, that sentence is cut at
  * the last word boundary before the limit and ended with "...". The whole prose is in the record.
  */

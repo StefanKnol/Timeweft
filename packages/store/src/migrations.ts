@@ -24,6 +24,24 @@ const KEEPS_ITS_OWN_ID = `id uuid primary key default gen_random_uuid()`;
 const WHEN_WRITTEN = `created_at timestamptz not null default clock_timestamp()`;
 const ORDER_WRITTEN = `written_order bigint generated always as identity`;
 
+/**
+ * Every character JavaScript's `\s` and `String.prototype.trim` treat as whitespace. PostgreSQL's
+ * `\s` follows the database's locale and, under `C.UTF-8`, does not take a no-break space, so the
+ * class is written out to match what `normaliseName` does in the doors.
+ */
+const WHITESPACE_AS_THE_DOORS_READ_IT = '\t\n\u000b\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff';
+
+/**
+ * The SQL that spells a property column as `normaliseProperty` does: NFC, trimmed, each run of
+ * whitespace one space, lower case. Exported so a test can hold the two to one answer.
+ */
+export function propertyAsTheDoorsKeepIt(column: string): string {
+  const whitespace = `[${WHITESPACE_AS_THE_DOORS_READ_IT}]`;
+  const composed = `normalize(${column}, NFC)`;
+  const trimmed = `regexp_replace(${composed}, '^${whitespace}+|${whitespace}+$', '', 'g')`;
+  return `lower(regexp_replace(${trimmed}, '${whitespace}+', ' ', 'g'))`;
+}
+
 export const MIGRATIONS: Migration[] = [
   {
     number: 1,
@@ -219,7 +237,33 @@ export const MIGRATIONS: Migration[] = [
         from scenes where scenes.id = waypoints.reached_in_scene_id and scenes.created_at > waypoints.created_at`,
     ],
   },
+  {
+    number: 3,
+    name: 'a property spelled as a name is, and open facts an author-only fact closed',
+    statements: [
+      // The doors now compose, trim, collapse inner whitespace and lower-case a property, as a name is
+      // matched. Rows written before that are brought in line by the same steps, in the same order.
+      `update facts set property = ${propertyAsTheDoorsKeepIt('property')}`,
+      `update collisions set property = ${propertyAsTheDoorsKeepIt('property')}`,
+      // Before each lane closed only its own, an author-only state_fact closed the open facts on its
+      // property, so a story saw the value end with nothing in its place. Such a closing is told
+      // apart by what it lacks: no scene's save did it (a save, and taking a story's side of a
+      // collision, record their scene as the closer), and no open fact written later on the same entry
+      // and property followed it (an open state_fact, and an import's chain, always write one). An
+      // open fact closed like that holds again. A fact a redone take established is closed at the
+      // struck scene with no closer either, and is left closed: that closing is the redo's.
+      `update facts set until_scene_id = null
+        where visibility = 'open' and until_scene_id is not null and closed_by_scene_id is null
+          and not exists (select 1 from scenes struck where struck.id = facts.until_scene_id and struck.status = 'struck')
+          and not exists (
+            select 1 from facts later
+            where later.entry_id = facts.entry_id and later.property = facts.property
+              and later.visibility = 'open' and later.written_order > facts.written_order
+          )`,
+    ],
+  },
 ];
+
 
 /**
  * Applies every migration not yet recorded. The advisory lock is keyed on the schema in use, so

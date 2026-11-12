@@ -1,12 +1,15 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { RunSnapshot, SceneRecord } from '@timeweft/contract';
 import { AuthorOnlyMark, KeptText } from './marks.tsx';
 import {
-  hashOfRoute, heldSpanInWords, readingsWithClockNames, sceneNumbersById,
-  scenesByNumber, whatASceneEstablished,
+  SCENES_SHOWN_AT_A_TIME, hashOfRoute, heldSpanInWords, newestShown, readingsWithClockNames, sceneNumbersById,
+  scenesByNumber, shownAfterShowingOlder, whatASceneEstablished,
 } from './shaping.ts';
 
 export function ScenesSection({ snapshot, selectedSceneId }: { snapshot: RunSnapshot; selectedSceneId: string | null }) {
+  // Called before any early return, as hooks must be; reading one scene and coming back keeps
+  // how far back the list was opened.
+  const [shownCount, setShownCount] = useState(SCENES_SHOWN_AT_A_TIME);
   const slots = scenesByNumber(snapshot.scenes);
   const selectedScene = selectedSceneId === null ? null : snapshot.scenes.find((scene) => scene.id === selectedSceneId) ?? null;
   const linkTo = (sceneId: string | null) => hashOfRoute({ page: 'run', slug: snapshot.run.slug, section: 'scenes', itemId: sceneId });
@@ -24,30 +27,44 @@ export function ScenesSection({ snapshot, selectedSceneId }: { snapshot: RunSnap
   }
   if (slots.length === 0) return <p>No scenes have been saved yet.</p>;
 
+  const newest = newestShown(slots, shownCount, SCENES_SHOWN_AT_A_TIME);
   return (
-    <ol className="plain-list">
-      {slots.map((slot) => (
-        <li key={slot.number} className="card">
-          {slot.standing === null ? (
-            <p className="quiet">Scene {slot.number}: every take was struck.</p>
-          ) : (
-            <SceneLine scene={slot.standing} href={linkTo(slot.standing.id)} />
-          )}
-          {slot.struck.length > 0 && (
-            <details className="struck-takes">
-              <summary>{slot.struck.length === 1 ? '1 struck take' : `${slot.struck.length} struck takes`}</summary>
-              <ul className="plain-list">
-                {slot.struck.map((scene) => (
-                  <li key={scene.id} className="struck">
-                    <SceneLine scene={scene} href={linkTo(scene.id)} nested />
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
-        </li>
-      ))}
-    </ol>
+    <>
+      <p className="quiet" role="status">
+        {newest.olderNotShown === 0 ? `All ${slots.length} scenes` : `The newest ${newest.shown.length} of ${slots.length} scenes`}
+      </p>
+      {newest.olderNotShown > 0 && (
+        // Older scenes go above the newest, so the button that brings them sits where they will appear.
+        <p>
+          <button type="button" onClick={() => setShownCount(shownAfterShowingOlder(shownCount, SCENES_SHOWN_AT_A_TIME, slots.length))}>
+            Show older ({newest.showOlderWouldAdd} more of {newest.olderNotShown})
+          </button>
+        </p>
+      )}
+      <ol className="plain-list">
+        {newest.shown.map((slot) => (
+          <li key={slot.number} className="card">
+            {slot.standing === null ? (
+              <p className="quiet">Scene {slot.number}: every take was struck.</p>
+            ) : (
+              <SceneLine scene={slot.standing} href={linkTo(slot.standing.id)} />
+            )}
+            {slot.struck.length > 0 && (
+              <details className="struck-takes">
+                <summary>{slot.struck.length === 1 ? '1 struck take' : `${slot.struck.length} struck takes`}</summary>
+                <ul className="plain-list">
+                  {slot.struck.map((scene) => (
+                    <li key={scene.id} className="struck">
+                      <SceneLine scene={scene} href={linkTo(scene.id)} nested />
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </li>
+        ))}
+      </ol>
+    </>
   );
 }
 

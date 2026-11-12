@@ -4,8 +4,9 @@
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import type { FactRecord, Store } from '@timeweft/contract';
-import { openStoreForTests } from './index.ts';
+import { randomUUID } from 'node:crypto';
+import { Refusal, type FactRecord, type Store } from '@timeweft/contract';
+import { openStoreForTests, type PostgresStore } from './index.ts';
 import { beginDemoRun, redoInput, sceneInput, stateFactInput } from './demo-world.ts';
 
 let store: Store;
@@ -157,3 +158,60 @@ test("taking the story's side never closes a fact a later scene established, and
   assert.equal(green.untilSceneId, collided.scene.id);
 });
 
+
+/** A run with an open lantern and an author-only cellar, and an open author fact about the cellar. */
+async function runWithAFactAboutAHiddenEntry(): Promise<string> {
+  runCounter += 1;
+  const slug = `lanes-hidden-about-${runCounter}`;
+  await store.importRun({
+    slug, title: 'The Ford', setting: '', status: 'binding', register: '', clocks: [],
+    scenes: [{ number: 1, title: 'One', starred: false, whenTyped: 'day one', place: null, summary: 'x', record: '', steer: '', situationAfter: '', readings: [] }],
+    entries: [
+      { name: 'the lantern', kind: 'item', alsoKnownAs: [], pronoun: '', introducedInScene: 1, visibility: 'open', facts: [], trail: [] },
+      { name: 'the sealed cellar', kind: 'place', alsoKnownAs: [], pronoun: '', introducedInScene: 1, visibility: 'author-only', facts: [], trail: [] },
+    ],
+    rulings: [], threads: [], waypoints: [], legs: [], unplaced: [],
+  });
+  // The fact itself is open, but what it is about is author-only, so a story is never served it.
+  await store.stateFact(stateFactInput({ run: slug, entry: 'the lantern', property: 'kept in', value: 'below', about: 'the sealed cellar' }));
+  return slug;
+}
+
+test('a story save never collides with an open author fact about an author-only entry', async () => {
+  const slug = await runWithAFactAboutAHiddenEntry();
+  const saved = await store.saveScene(sceneInput({ run: slug, facts: [{ entry: 'the lantern', property: 'kept in', value: 'the attic' }] }));
+  assert.equal(saved.collisions.length, 0, 'a collision would hand the story the id of a fact it is never served');
+  assert.deepEqual(saved.cautions, []);
+  assert.deepEqual(saved.factsWritten.map((fact) => fact.value), ['the attic']);
+  assert.deepEqual(holdingValues(await factsOn(slug, 'author', 'kept in')), ['below', 'the attic']);
+});
+
+test('a story save never closes an open fact about an author-only entry, even when it says the author stated it', async () => {
+  const slug = await runWithAFactAboutAHiddenEntry();
+  await store.saveScene(sceneInput({ run: slug, facts: [{ entry: 'the lantern', property: 'kept in', value: 'the attic', statedByAuthor: true }] }));
+  assert.deepEqual(holdingValues(await factsOn(slug, 'author', 'kept in')), ['below', 'the attic']);
+});
+
+test('a redo is as blind to an open fact about an author-only entry as a save', async () => {
+  const slug = await runWithAFactAboutAHiddenEntry();
+  await store.saveScene(sceneInput({ run: slug }));
+  const redone = await store.redoScene(redoInput({ run: slug, number: 2, facts: [{ entry: 'the lantern', property: 'kept in', value: 'the attic' }] }));
+  assert.equal(redone.collisions.length, 0);
+  assert.deepEqual(holdingValues(await factsOn(slug, 'author', 'kept in')), ['below', 'the attic']);
+});
+
+test("a collision written against an open fact about an author-only entry is not taken on the story's side", async () => {
+  const slug = await runWithAFactAboutAHiddenEntry();
+  const saved = await store.saveScene(sceneInput({ run: slug }));
+  const author = await store.snapshotOf(slug, 'author');
+  const standing = author.facts.find((fact) => fact.value === 'below')!;
+  // No door writes such a collision any more; a database from before the rule may hold one.
+  const { database } = store as PostgresStore;
+  const written = await database.insertInto('collisions').values({
+    id: randomUUID(), run_id: author.run.id, scene_id: saved.scene.id, entry_id: standing.entryId, property: 'kept in',
+    standing_fact_id: standing.id, proposed_value: 'the attic', proposed_about_entry_id: null, state: 'waiting',
+  }).returning('id').executeTakeFirstOrThrow();
+  await assert.rejects(store.settleCollision({ collision: written.id, take: 'story' }),
+    (error) => error instanceof Refusal && /author-only/.test(error.message));
+  assert.deepEqual(holdingValues(await factsOn(slug, 'author', 'kept in')), ['below']);
+});

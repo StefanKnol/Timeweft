@@ -6,7 +6,7 @@
 import type { EntryKind, ImportedEntry, ImportedRun, Source } from '@timeweft/contract';
 import {
   bulletsOf, containsSceneReference, firstParentheticalSceneNumber, lastSceneNumberOfReference,
-  leadingParenthetical, linesOf, sceneEndingSegment, saysTheAuthorGaveIt, splitStackedHistory,
+  leadingParenthetical, linesOf, sceneEndingSegment, saysTheAuthorGaveIt, splitStackedHistoryDated,
   topLevelParentheticals, type NumberedLine,
 } from './text-helpers.ts';
 
@@ -81,15 +81,17 @@ export function factsOfLabelledBullet(label: string, text: string): ImportedFact
   const stampNote = stampParts.join('; ');
   const labelScene = stampParts.map((part) => lastSceneNumberOfReference(part)).find((number) => number !== null) ?? null;
 
-  const segmentsNewestFirst = splitStackedHistory(text, { presentSceneWhereUndated: labelScene });
-  const facts: ImportedFact[] = segmentsNewestFirst.map((segment, index) => {
-    const value = index === 0 ? segment.replace(/^now\s*:\s*/i, '') : segment;
-    const ownScene = sceneEndingSegment(value);
-    // The label's stamp dates the present, the newest segment, and nothing older.
-    const fromScene = ownScene ?? (index === 0 ? labelScene : null);
-    return { property, value, fromScene, source, note: index === 0 ? stampNote : '' };
-  });
-  return facts.reverse();
+  // "now:" opening a field is a word about the present, not part of it, and must not hide the
+  // present's own leading phrase from the reading of its scene.
+  const history = splitStackedHistoryDated(text.trim().replace(/^now\s*:\s*/i, ''), { presentSceneWhereUndated: labelScene });
+  // The present carries the segments kept with it in its value, but is dated by its own scene
+  // alone (or the label's stamp), never by a later segment appended to it.
+  const presentValue = [history.present, ...history.keptWithThePresent].join(' ');
+  const presentFact: ImportedFact = { property, value: presentValue, fromScene: history.presentScene, source, note: stampNote };
+  const olderFacts: ImportedFact[] = history.olderNewestFirst.map((segment) => (
+    { property, value: segment, fromScene: sceneEndingSegment(segment), source, note: '' }
+  ));
+  return [presentFact, ...olderFacts].reverse();
 }
 
 interface FileShape {

@@ -193,16 +193,31 @@ function readClockSection(section: Section, read: StateRead): string {
  * A relative clock counts days after an event and is written "day +N". Its name is the words in
  * front of the first "day +N" written in a parenthesis or after an equals sign in the Clock
  * section, such as "(home day +4)" giving "home"; where none stand there, it is "days after".
+ *
+ * Its description is read only from the bullets that define clocks, never from "Current": the
+ * present stacks its own history ("Before that, day +3 at the ford ...") and every sentence of
+ * that history names a "day +N", so reading it would turn the clock's description into a log.
+ * The name looks at the defining bullets first and at the present only where they name nothing.
  */
 function addRelativeClock(section: Section, read: StateRead): void {
-  const text = section.lines.map((line) => line.text).join('\n');
-  if (!/\bday\s*\+\s*\d/i.test(text)) return;
-  const prefixMatch = /[(=]\s*([A-Za-z][A-Za-z'’ ]{0,40}?)\s+day\s*\+\s*\d/i.exec(text);
+  const { bullets, strays } = bulletsOf(section.lines);
+  const definingTexts = [
+    ...strays.map((stray) => stray.text.trim()),
+    ...bullets.filter((bullet) => !/^\*{0,2}current\*{0,2}\s*:/i.test(bullet.text.trim())).map((bullet) => bullet.text),
+  ];
+  const wholeText = section.lines.map((line) => line.text).join('\n');
+  if (!/\bday\s*\+\s*\d/i.test(wholeText)) return;
+  const definingText = definingTexts.join('\n');
+  const prefixPattern = /[(=]\s*([A-Za-z][A-Za-z'’ ]{0,40}?)\s+day\s*\+\s*\d/i;
+  const prefixMatch = prefixPattern.exec(definingText) ?? prefixPattern.exec(wholeText);
   const prefixWords = prefixMatch ? (prefixMatch[1] ?? '').trim().split(/\s+/).filter((word) => !/^(the|a|an)$/i.test(word)) : [];
-  const explaining = text.split(/(?<=[.;])\s+|\n/).filter((sentence) => /relative to|day\s*\+\s*\d/i.test(sentence) && !/^\s*-\s*current\b/i.test(sentence));
+  // A defining bullet keeps its label ("Run began: ..."), which says what its sentence is about.
+  const explaining = definingTexts
+    .flatMap((text) => text.split(/(?<=[.;])\s+|\n/))
+    .filter((sentence) => /relative to|day\s*\+\s*\d/i.test(sentence));
   read.clocks.push({
     name: prefixWords.length > 0 ? prefixWords.join(' ') : 'days after',
-    countsFrom: explaining.map((sentence) => sentence.replace(/^\s*-\s*/, '').trim()).join(' ') || 'Days after an event, written "day +N".',
+    countsFrom: explaining.map((sentence) => sentence.trim()).join(' ') || 'Days after an event, written "day +N".',
     form: 'relative',
     prefixWords,
   });
@@ -269,30 +284,64 @@ function readThreadSection(section: Section, read: StateRead, names: NameFinder)
 
 const CLOSING_MARKER = '(?:closed|resolved|done)';
 
+/** A scene named after an ending marker: "(Scene 12)", ", Scene 12", "in Scene 12", "Scenes 4-6". */
+const TRAILING_SCENE_NOTE = '(?:\\s*[,:\\-–\\u2014]?\\s*\\(?\\s*(?:in\\s+|at\\s+)?Scenes?\\s+\\d+(?:\\s*(?:[-–]|to|,|and)\\s*\\d+)*\\s*\\)?)?';
+
+/** A parenthetical scene note that may stand between a marker after a label and its separator. */
+const PARENTHETICAL_SCENE_NOTE = '(?:\\s*\\(\\s*(?:in\\s+|at\\s+)?Scenes?\\s+[^)]*\\))?';
+
+/**
+ * Bold, italics and strike-through, taken off so that a marker written "**Done**", "*Closed.*" or
+ * "_Resolved_" reads as the marker. An underscore is taken off only at a word's edge, where it is
+ * emphasis, never inside a word.
+ */
+function withoutEmphasis(text: string): string {
+  return text
+    .replace(/~~/g, '')
+    .replace(/\*+/g, '')
+    .replace(/(^|[\s(\[])_+/g, '$1')
+    .replace(/_+(?=$|[\s.,;:!?)\]])/g, '')
+    .trim();
+}
+
 /**
  * Whether a thread bullet says it is closed, and if so its resolution. Three shapes count, each
- * with bold and strike-through stripped first:
+ * with bold, italics and strike-through stripped first:
  *
  * - the marker opens the bullet ("Closed: ...", "**Done** ...");
  * - the marker opens the text after a short leading label of at most sixty characters with no
- *   sentence in it ("The debt: resolved; ..."), the resolution being the text after the marker;
- * - the marker ends the bullet as a sentence of its own ("... found in the reeds. Closed."), the
- *   resolution being everything before it.
+ *   sentence in it ("The debt: resolved; ..."), the resolution being the text after the marker.
+ *   It counts only where the marker is followed, past an optional "(Scene N)", by the end of the
+ *   text or by a separator (a colon, a dash, a semicolon or a full stop): "The weir: closed sluices
+ *   keep the pond full" is a thread about something closed, not a closed thread;
+ * - the marker ends the bullet, after a sentence end, a dash, a comma, "(" or "[", optionally
+ *   followed by a scene note ("... found in the reeds. Closed.", "... - resolved, Scene 12.",
+ *   "... (closed)", "... [closed in Scene 12]"), the resolution being everything before it. A
+ *   hyphen counts as a dash only with a space before it, so "half-done." is not a closing.
  *
  * A marker inside a sentence ("is not resolved.", "was all done.") is never read as closing,
  * because a negation or a passing remark reads exactly the same there.
  */
 export function closureOfThread(bulletText: string): string | null {
-  const plain = bulletText.replace(/~~/g, '').replace(/\*\*/g, '').trim();
-  const leading = new RegExp(`^${CLOSING_MARKER}\\b\\s*[:.\\-–;,]?\\s*([\\s\\S]*)$`, 'i').exec(plain);
+  const plain = withoutEmphasis(bulletText);
+  const leading = new RegExp(`^${CLOSING_MARKER}\\b\\s*[:.\\-–\\u2014;,]?\\s*([\\s\\S]*)$`, 'i').exec(plain);
   if (leading) return (leading[1] ?? '').trim();
-  const afterLabel = new RegExp(`^([^:.;!?\\n]{1,60}):\\s*${CLOSING_MARKER}\\b\\s*[:.\\-–;,]?\\s*([\\s\\S]*)$`, 'i').exec(plain);
+  const afterLabel = new RegExp(
+    `^([^:.;!?\\n]{1,60}):\\s*${CLOSING_MARKER}\\b(?=${PARENTHETICAL_SCENE_NOTE}\\s*(?:$|[:.\\-–\\u2014;]))\\s*[:.\\-–\\u2014;]?\\s*([\\s\\S]*)$`,
+    'i',
+  ).exec(plain);
   if (afterLabel) {
     const after = (afterLabel[2] ?? '').trim();
     return after === '' ? (afterLabel[1] ?? '').trim() : after;
   }
-  const ending = new RegExp(`(^|[.;:!?)]\\s+|^\\(\\s*)${CLOSING_MARKER}\\s*[.!]?\\s*\\)?$`, 'i').exec(plain);
-  if (ending) return plain.slice(0, ending.index + (ending[1] ?? '').length).trim();
+  const ending = new RegExp(
+    `(^[(\\[]\\s*|[.;:!?)\\]]\\s+|(?:\\s+[-–\\u2014]|\\s*[–\\u2014]|,)\\s*|\\s+[(\\[]\\s*)${CLOSING_MARKER}${TRAILING_SCENE_NOTE}\\s*[.!]?\\s*[)\\]]?\\s*[.!]?\\s*$`,
+    'i',
+  ).exec(plain);
+  if (ending) {
+    // Everything before the marker, less the dash, comma or bracket that set the marker off.
+    return plain.slice(0, ending.index + (ending[1] ?? '').length).replace(/[\s\-–\u2014,(\[]+$/, '').trim();
+  }
   return null;
 }
 
@@ -301,8 +350,11 @@ function readWaypointSection(section: Section, read: StateRead): void {
   for (const stray of strays) read.unplaced.push(`state.md line ${stray.lineNumber}: a line among the waypoints that is not a bullet.`);
   for (const bullet of bullets) {
     const text = bullet.text.trim();
-    // Reached only where the bullet says so at its start, or crosses itself out.
-    const reached = /^(?:~~|\(?\s*reached\b|\(?\s*done\b)/i.test(text);
+    // Reached where the bullet says so at its start, crosses itself out, or says anywhere that it
+    // was played, reached or done in a scene ("Played Scene 12", "(reached Scene 30)", "done in
+    // Scene 40"). The scene number is what keeps "has played the fiddle before" from counting.
+    const reached = /^(?:~~|\(?\s*reached\b|\(?\s*done\b)/i.test(text)
+      || /\b(?:played|reached|done)\b[\s:,]*(?:in\s+|at\s+)?\(?\s*Scenes?\s+\d/i.test(text);
     read.waypoints.push({ text, reached });
   }
 }
