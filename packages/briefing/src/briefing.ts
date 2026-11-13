@@ -22,7 +22,7 @@ import type {
 } from '@timeweft/contract';
 import { resolveEntryInIndex } from './readers.ts';
 import {
-  compareText, entryNameOf, holdingFactsOf, indexRun, lastTouchedSceneNumberOf, newestStandingScene, openThreadsNewestFirst, rulingsInForce, sceneNumberOf,
+  compareText, entryNameOf, holdingFactsOf, indexRun, lastTouchedSceneNumberOf, mainCharacterInIndex, newestStandingScene, trailCountOf, openThreadsNewestFirst, rulingsInForce, sceneNumberOf,
   trailNewestFirstOf, wasEstablishedInAStruckScene,
 } from './run-index.ts';
 import type { RunIndex } from './run-index.ts';
@@ -502,14 +502,11 @@ function entriesAboutNow(index: RunIndex): EntryRecord[] {
     for (const note of index.snapshot.notes) if (note.sceneId === scene.id) present.add(note.entryId);
     for (const entryId of present) presence.set(entryId, (presence.get(entryId) ?? 0) + weight);
   });
-  const trailCountOf = (entryId: Id): number => index.servableNotesByEntry.get(entryId)?.length ?? 0;
   const byWeight = (left: EntryRecord, right: EntryRecord): number =>
     (presence.get(right.id) ?? 0) - (presence.get(left.id) ?? 0)
-    || trailCountOf(right.id) - trailCountOf(left.id)
+    || trailCountOf(index, right.id) - trailCountOf(index, left.id)
     || compareText(left.name, right.name) || compareText(left.id, right.id);
-  const mostTrailed = [...index.snapshot.entries]
-    .filter((entry) => trailCountOf(entry.id) > 0)
-    .sort((left, right) => trailCountOf(right.id) - trailCountOf(left.id) || compareText(left.name, right.name) || compareText(left.id, right.id))[0];
+  const mostTrailed = mainCharacterInIndex(index);
   const present = index.snapshot.entries
     .filter((entry) => (presence.get(entry.id) ?? 0) > 0 && entry.id !== mostTrailed?.id)
     .sort(byWeight);

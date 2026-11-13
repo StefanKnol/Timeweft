@@ -172,3 +172,32 @@ export function openThreadsNewestFirst(index: RunIndex): ThreadRecord[] {
 export function entryNameOf(index: RunIndex, entryId: Id): string | null {
   return index.entryById.get(entryId)?.name ?? null;
 }
+
+/** How many standing trail notes an entry has: notes written in a struck scene are not counted. */
+export function trailCountOf(index: RunIndex, entryId: Id): number {
+  return index.servableNotesByEntry.get(entryId)?.length ?? 0;
+}
+
+/**
+ * Where each entry stands in the snapshot, which is the order the store wrote them in. Ties that
+ * names cannot break are broken by it, never by id, since ids are random.
+ */
+export function writtenPositionsOfEntries(index: RunIndex): Map<Id, number> {
+  return new Map(index.snapshot.entries.map((entry, position) => [entry.id, position]));
+}
+
+/**
+ * The main character: the entry with the most standing trail notes in the whole run, ties going
+ * to the name that sorts first and then to the one written first. In a long run that is the one
+ * the story is told through, present in every scene. Undefined where no entry has a trail. This
+ * is the one home of the rule: the briefing serves this entry first, and the people a chat may
+ * attach are led by it.
+ */
+export function mainCharacterInIndex(index: RunIndex): EntryRecord | undefined {
+  const writtenPosition = writtenPositionsOfEntries(index);
+  return [...index.snapshot.entries]
+    .filter((entry) => trailCountOf(index, entry.id) > 0)
+    .sort((left, right) => trailCountOf(index, right.id) - trailCountOf(index, left.id)
+      || compareText(left.name, right.name)
+      || (writtenPosition.get(left.id) ?? 0) - (writtenPosition.get(right.id) ?? 0))[0];
+}

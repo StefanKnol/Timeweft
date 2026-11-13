@@ -64,6 +64,21 @@ function threadTouches(thread: ThreadRecord, entryIds: ReadonlySet<Id>): boolean
 export function lookUpInIndex(index: RunIndex, name: string, options: { withHistory: boolean; trail: number }): EntryLookup {
   const entry = resolveEntryInIndex(index, name);
   if (!entry) throw new Refusal(`Nothing in this run is called "${name.trim()}". It would be new.`);
+  return lookUpOneEntry(index, entry, options);
+}
+
+/**
+ * What look_up answers for one entry, found by its id rather than by a name, since two entries
+ * may share a name. Null where the snapshot holds no entry with that id, which is also the answer
+ * for an entry the snapshot's audience may not see.
+ */
+export function lookUpEntryById(snapshot: RunSnapshot, entryId: Id, options: { withHistory: boolean; trail: number }): EntryLookup | null {
+  const index = indexRun(snapshot);
+  const entry = index.entryById.get(entryId);
+  return entry === undefined ? null : lookUpOneEntry(index, entry, options);
+}
+
+function lookUpOneEntry(index: RunIndex, entry: EntryRecord, options: { withHistory: boolean; trail: number }): EntryLookup {
   const trailWanted = Math.max(0, Math.floor(options.trail));
   const wholeTrail = trailNewestFirstOf(index, entry.id);
   const shownTrail = wholeTrail.slice(0, trailWanted);
