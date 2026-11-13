@@ -3,7 +3,8 @@ import { RUN_STATUSES } from '@timeweft/contract';
 import type { ImportedRunReport, RunStatus } from '@timeweft/contract';
 import { useCallOperation } from './calling.tsx';
 import {
-  IMPORT_PARTS, hashOfRoute, importCountsInWords, importToSend, matchFilesToParts, sizeInWords, slugShown,
+  IMPORT_PARTS, hashOfRoute, importButtonText, importCountsInWords, importToSend, matchFilesToParts, removedEarlierImportInWords,
+  replaceEarlierImportLabel, replaceEarlierImportOffered, sizeInWords, slugRefusedAsExisting, slugShown,
   titleFromLogText, unplacedInWords, whyImportCannotStart, type ImportPart,
 } from './shaping.ts';
 
@@ -31,6 +32,9 @@ export function ImportRunSection({ onImported }: { onImported: () => void }) {
   const [status, setStatus] = useState<RunStatus>('binding');
   const [result, setResult] = useState<ImportResult>({ state: 'none' });
   const [unplacedShown, setUnplacedShown] = useState(false);
+  // The slug the server refused because a run has it, which is what offers replacing that run.
+  const [slugTheServerSaidExists, setSlugTheServerSaidExists] = useState<string | null>(null);
+  const [replaceTicked, setReplaceTicked] = useState(false);
   // Counts the picks, so a log read for an earlier pick never lands after a later one.
   const pickNumber = useRef(0);
 
@@ -38,6 +42,8 @@ export function ImportRunSection({ onImported }: { onImported: () => void }) {
   const slug = slugShown(typedSlug, authorTypedSlug, titleOfLog);
   const whyNot = whyImportCannotStart(matched, slug);
   const running = result.state === 'running';
+  const replaceOffered = replaceEarlierImportOffered(slugTheServerSaidExists, slug);
+  const replacing = replaceOffered && replaceTicked;
 
   const pickFiles = async (files: File[]) => {
     pickNumber.current += 1;
@@ -71,7 +77,7 @@ export function ImportRunSection({ onImported }: { onImported: () => void }) {
       setResult({ state: 'fault', fault: `A file could not be read (${error instanceof Error ? error.message : String(error)}).` });
       return;
     }
-    const toSend = importToSend({ slug, title, setting, status }, textByPart);
+    const toSend = importToSend({ slug, title, setting, status, replaceEarlierImport: replacing }, textByPart);
     if (!toSend.ok) {
       setResult({ state: 'not-sent', reason: toSend.reason });
       return;
@@ -79,8 +85,15 @@ export function ImportRunSection({ onImported }: { onImported: () => void }) {
     const outcome = await callOperation('import_run', toSend.input);
     if (outcome.kind === 'answer') {
       setResult({ state: 'imported', report: outcome.answer });
+      setSlugTheServerSaidExists(null);
+      setReplaceTicked(false);
       onImported();
-    } else if (outcome.kind === 'refusal') setResult({ state: 'refused', refusal: outcome.refusal });
+    } else if (outcome.kind === 'refusal') {
+      setResult({ state: 'refused', refusal: outcome.refusal });
+      // A refusal of a replacing import keeps the offer; only the run-exists refusal starts it.
+      const existing = slugRefusedAsExisting(outcome.refusal, slug);
+      if (existing !== null) setSlugTheServerSaidExists(existing);
+    }
     else if (outcome.kind === 'fault') setResult({ state: 'fault', fault: outcome.fault });
     // An access refusal is answered by the gate asking for the token again.
     else setResult({ state: 'none' });
@@ -165,8 +178,20 @@ export function ImportRunSection({ onImported }: { onImported: () => void }) {
           ))}
         </fieldset>
 
+        {replaceOffered && (
+          <label className="replace-earlier-import">
+            <input
+              type="checkbox"
+              checked={replaceTicked}
+              disabled={running}
+              onChange={(event) => setReplaceTicked(event.target.checked)}
+            />{' '}
+            {replaceEarlierImportLabel(slug)}
+          </label>
+        )}
+
         <button type="submit" disabled={whyNot !== null || running} aria-describedby={`${idPrefix}-why-not`}>
-          {running ? 'Importing…' : 'Import'}
+          {importButtonText(running, replacing)}
         </button>
         <p id={`${idPrefix}-why-not`} className="quiet field-hint">{running ? '' : whyNot ?? ''}</p>
       </form>
@@ -181,6 +206,20 @@ export function ImportRunSection({ onImported }: { onImported: () => void }) {
                 <li key={each.label}>{each.label}: {each.count}</li>
               ))}
             </ul>
+            {(() => {
+              const removed = removedEarlierImportInWords(result.report);
+              if (removed === null) return null;
+              return (
+                <>
+                  <p>It replaced the earlier import, which was removed. That run held:</p>
+                  <ul className="plain-list import-counts">
+                    {removed.map((each) => (
+                      <li key={each.label}>{each.label}: {each.count}</li>
+                    ))}
+                  </ul>
+                </>
+              );
+            })()}
             <p>{unplacedInWords(result.report.unplaced.length)}</p>
             {result.report.unplaced.length > 0 && (
               <>

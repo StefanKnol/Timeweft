@@ -111,7 +111,8 @@ test('a refused import says nothing from the files on the console', async () => 
   }).then(() => null, (error: { code: number; stdout: string; stderr: string }) => error);
   assert.ok(failed !== null, 'importing a slug already there should fail');
   assert.equal(failed.code, 1);
-  assert.match(failed.stderr, /refused/);
+  // A slug already taken is said as it is, with the flag that replaces it, since it quotes nothing.
+  assert.match(failed.stderr, /already exists, so nothing was written\..*--replace-earlier-import/);
   assert.ok(!failed.stderr.includes('Bram'));
 });
 

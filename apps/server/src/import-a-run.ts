@@ -6,7 +6,7 @@
  * It never prints anything. What the caller says about the answer is the caller's: the pages show
  * the author their own text, and the command keeps every line of it off the console.
  */
-import { Refusal, type ImportedRunReport, type RunSnapshot, type RunStatus, type Store, type WeaverFiles } from '@timeweft/contract';
+import { Refusal, type ImportedRunReport, type RunCounts, type RunSnapshot, type RunStatus, type Store, type WeaverFiles } from '@timeweft/contract';
 import { readWeaverFiles, type ReadWeaverFilesOptions } from '@timeweft/weaver-files';
 
 export interface ImportOptions {
@@ -14,6 +14,8 @@ export interface ImportOptions {
   title?: string;
   setting?: string;
   status?: RunStatus;
+  /** True to replace the run an earlier import of this slug made. Left out, a slug already there is refused. */
+  replaceEarlierImport?: boolean;
 }
 
 /** The names of the five files, as the refusal for an empty import says them. */
@@ -36,8 +38,9 @@ export function refusalForFilesThatHoldNothing(files: WeaverFiles): NothingToImp
 }
 
 /** What an import wrote, counted off the store's own snapshot rather than off what was read. */
-export function importedRunReportOf(snapshot: RunSnapshot, unplaced: string[]): ImportedRunReport {
+export function importedRunReportOf(snapshot: RunSnapshot, unplaced: string[], removedEarlierImport: RunCounts | null = null): ImportedRunReport {
   return {
+    removedEarlierImport,
     run: snapshot.run,
     counts: {
       scenes: snapshot.scenes.filter((scene) => scene.status === 'standing').length,
@@ -67,6 +70,10 @@ export async function importWeaverFiles(store: Store, files: WeaverFiles, option
   if (options.setting !== undefined) readerOptions.setting = options.setting;
   if (options.status !== undefined) readerOptions.status = options.status;
   const run = readWeaverFiles(files, readerOptions);
+  if (options.replaceEarlierImport === true) {
+    const replaced = await store.replaceImportedRun(run);
+    return importedRunReportOf(replaced.snapshot, run.unplaced, replaced.removed);
+  }
   const snapshot = await store.importRun(run);
   return importedRunReportOf(snapshot, run.unplaced);
 }

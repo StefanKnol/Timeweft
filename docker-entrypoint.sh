@@ -9,6 +9,9 @@
 #   docker run --rm -v /path/to/the/run:/import:ro -e TIMEWEFT_DATABASE_HOST=... \
 #     -e TIMEWEFT_DATABASE_USER=... -e TIMEWEFT_DATABASE_PASSWORD=... <image> \
 #     import-run --folder /import --slug <slug>
+#
+# Add --replace-earlier-import to import the files again over the run an earlier import of that
+# slug made. It is refused where the run holds anything a story or the author wrote after it.
 set -eu
 
 run_node() {

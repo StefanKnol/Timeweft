@@ -11,9 +11,10 @@
  * - A property whose name ends in " (each)" is additive: its facts stand alongside one another, so
  *   none is closed by another and all of them hold.
  * - Any other property is put in scene order before it is chained, whatever order the file gave.
- *   The sort is stable, and a fact with no scene keeps its place after the dated fact before it in
- *   the file (or first, where none comes before it): it is sorted as though it had that fact's
- *   scene. Each fact is then closed at the scene of the next one along that has a known scene,
+ *   The sort is stable, and a fact with no scene is sorted as though it had the newest scene of
+ *   the dated facts before it in the file (or first, where none comes before it), so it stays
+ *   after everything written before it: a field that stacks its history ends on its undated
+ *   present, which must not sort before an older segment dated later than its neighbour. Each fact is then closed at the scene of the next one along that has a known scene,
  *   which in scene order is never earlier than its own. Where no later one has a known scene, it
  *   is closed at the run's newest scene, since the files say a newer fact held by then.
  * - A trail note on a scene number the files do not have is a refusal naming it. Attaching it to
@@ -44,14 +45,14 @@ const ADDITIVE_PROPERTY_ENDING = ' (each)';
 
 /**
  * The facts of one property in scene order, stably. A fact with no scene is sorted as though it had
- * the scene of the dated fact before it in the file, so it stays just after that neighbour; one
- * with no dated fact before it sorts first.
+ * the newest scene of the dated facts before it in the file, so nothing written before it sorts
+ * after it; one with no dated fact before it sorts first.
  */
-function inSceneOrder<Fact extends { fromScene: number | null }>(facts: Fact[]): Fact[] {
-  let previousDatedScene = Number.NEGATIVE_INFINITY;
+export function inSceneOrder<Fact extends { fromScene: number | null }>(facts: Fact[]): Fact[] {
+  let newestDatedSceneSoFar = Number.NEGATIVE_INFINITY;
   const keyed = facts.map((fact, position) => {
-    if (fact.fromScene !== null) previousDatedScene = fact.fromScene;
-    return { fact, position, key: fact.fromScene ?? previousDatedScene };
+    if (fact.fromScene !== null) newestDatedSceneSoFar = Math.max(newestDatedSceneSoFar, fact.fromScene);
+    return { fact, position, key: fact.fromScene ?? newestDatedSceneSoFar };
   });
   keyed.sort((left, right) => left.key - right.key || left.position - right.position);
   return keyed.map((item) => item.fact);

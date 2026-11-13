@@ -22,7 +22,7 @@ import type {
 } from '@timeweft/contract';
 import { resolveEntryInIndex } from './readers.ts';
 import {
-  compareText, entryNameOf, holdingFactsOf, indexRun, newestStandingScene, rulingsInForce, sceneNumberOf, servableThreads,
+  compareText, entryNameOf, holdingFactsOf, indexRun, newestStandingScene, openThreadsNewestFirst, rulingsInForce, sceneNumberOf,
   trailNewestFirstOf, wasEstablishedInAStruckScene,
 } from './run-index.ts';
 import type { RunIndex } from './run-index.ts';
@@ -514,6 +514,30 @@ function sinceWhen(index: RunIndex, fact: FactRecord): string {
   return number === null ? 'since a scene not in the run' : `since scene ${number}`;
 }
 
+/**
+ * Properties that say where an entry was last met. A trail note is written each time the entry is
+ * on the page, so where such a fact is older than the entry's newest trail note, the trail has gone
+ * on without it and the fact can no longer be read as where the entry is now.
+ */
+export const PROPERTIES_THE_TRAIL_OVERTAKES: readonly string[] = ['last seen'];
+
+function foldedProperty(property: string): string {
+  return onOneLine(property).toLowerCase().replace(/[-_:]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * The scene of the entry's newest trail note, where a holding fact about where it was last met is
+ * older than that note, or null where the fact is not overtaken. The fact is never changed or
+ * dropped: it is the newest value written down, and the briefing only says the trail goes on.
+ */
+function sceneTheTrailOvertakesItAt(index: RunIndex, fact: FactRecord, newestTrailScene: number | null): number | null {
+  if (newestTrailScene === null) return null;
+  if (!PROPERTIES_THE_TRAIL_OVERTAKES.includes(foldedProperty(fact.property))) return null;
+  const factScene = fact.fromSceneId === null ? 0 : sceneNumberOf(index, fact.fromSceneId);
+  if (factScene === null) return null;
+  return newestTrailScene > factScene ? newestTrailScene : null;
+}
+
 /** An entry's holding facts, newest first, so what was established lately leads. */
 function holdingFactsNewestFirst(index: RunIndex, entryId: Id): FactRecord[] {
   return [...holdingFactsOf(index, entryId)].sort((left, right) =>
@@ -545,13 +569,27 @@ function onThePageNextSection(index: RunIndex, names: UpcomingName[], servedWhol
     const otherNames = entry.alsoKnownAs.length > 0 ? `, also ${entry.alsoKnownAs.map(onOneLine).join(', ')}` : '';
     const headingIndex = pieces.length;
     const trail = trailNewestFirstOf(index, entry.id).slice(0, TRAIL_NOTES_PER_ENTRY);
-    const holding = holdingFactsNewestFirst(index, entry.id);
+    const newestTrailScene = trail[0] ? sceneNumberOf(index, trail[0].sceneId) : null;
+    const holdingNewestFirst = holdingFactsNewestFirst(index, entry.id);
+    const overtakenAt = new Map<Id, number>();
+    for (const fact of holdingNewestFirst) {
+      const sceneNumber = sceneTheTrailOvertakesItAt(index, fact, newestTrailScene);
+      if (sceneNumber !== null) overtakenAt.set(fact.id, sceneNumber);
+    }
+    // A fact the trail has overtaken is ranked after the trail, so the newest note is served first
+    // and the fact never stands alone as where the entry is now.
+    const freshFacts = holdingNewestFirst.filter((fact) => !overtakenAt.has(fact.id));
+    const overtakenFacts = holdingNewestFirst.filter((fact) => overtakenAt.has(fact.id));
+    const factsAheadOfTheTrail = Math.min(FACTS_BEFORE_THE_TRAIL, freshFacts.length);
+    const holding = [...freshFacts.slice(0, factsAheadOfTheTrail), ...overtakenFacts, ...freshFacts.slice(factsAheadOfTheTrail)];
     const factPiece = (factIndex: number): Piece | null => {
       const fact = holding[factIndex];
       if (!fact) return null;
       const pointedAt = fact.aboutEntryId === null ? '' : ` (${entryNameOf(index, fact.aboutEntryId) ?? 'an entry not served here'})`;
+      const overtaken = overtakenAt.get(fact.id);
+      const trailGoesOn = overtaken === undefined ? '' : `; its trail goes on to scene ${overtaken}`;
       // The age is in the label, so that a value cut short still says since when it held.
-      const label = `- ${onOneLine(fact.property)} (${sinceWhen(index, fact)}): `;
+      const label = `- ${onOneLine(fact.property)} (${sinceWhen(index, fact)}${trailGoesOn}): `;
       const line = capped(label, `${onOneLine(fact.value)}${pointedAt}`, LONGEST_FACT_LINE_BYTES);
       return makePiece(label, line.body, { priority: 0, position: blockStart + 1 + factIndex, alreadyCut: line.cut });
     };
@@ -570,9 +608,8 @@ function onThePageNextSection(index: RunIndex, names: UpcomingName[], servedWhol
     };
     if (!servedWhole) {
       add(makePiece(`### ${onOneLine(entry.name)} (${entry.kind}${pronoun})`, otherNames, { priority: 0, position: blockStart }), interleavedPriority(0, nameIndex), null);
-      const factsAheadOfTheTrail = Math.min(FACTS_BEFORE_THE_TRAIL, holding.length);
       holding.forEach((_, factIndex) => {
-        const step = factIndex < FACTS_BEFORE_THE_TRAIL ? 1 + factIndex : 1 + factIndex + trail.length;
+        const step = factIndex < factsAheadOfTheTrail ? 1 + factIndex : 1 + factIndex + trail.length;
         add(factPiece(factIndex), interleavedPriority(step, nameIndex), headingIndex);
       });
       trail.forEach((_, noteIndex) => add(trailPiece(noteIndex), interleavedPriority(1 + factsAheadOfTheTrail + noteIndex, nameIndex), headingIndex));
@@ -672,8 +709,15 @@ function rulingsSection(index: RunIndex, upcomingEntryIds: ReadonlySet<Id>): Sec
   };
 }
 
+/**
+ * The open threads, ranked so a fresh chat meets what matters first: the threads about an entry on
+ * the page next lead, then the rest. Within each group a thread opened in a later scene comes
+ * before one opened in an earlier scene, ties go to the one written later, and a thread whose
+ * opening scene is not known comes after every one whose scene is, the latest written first
+ * (openThreadsNewestFirst says it in full).
+ */
 function threadsSection(index: RunIndex, upcomingEntryIds: ReadonlySet<Id>): SectionPlan {
-  const openNewestFirst = servableThreads(index).filter((thread) => thread.closedInSceneId === null).reverse();
+  const openNewestFirst = openThreadsNewestFirst(index);
   const touching = openNewestFirst.filter((thread) => thread.aboutEntryIds.some((entryId) => upcomingEntryIds.has(entryId)));
   const others = openNewestFirst.filter((thread) => !thread.aboutEntryIds.some((entryId) => upcomingEntryIds.has(entryId)));
   const pieces = [...touching, ...others].map((thread, threadIndex) => {

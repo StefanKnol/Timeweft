@@ -79,8 +79,22 @@ export function readingsOfWhen(whenTyped: string, clocks: ClockDefinition[]): Im
     remainder = remainder.replace(match[0], ' ');
   }
   if (counts.length === 0) return [];
-  const partOfDay = remainder.replace(/\(\s*\)/g, ' ').replace(/[()]/g, ' ').replace(/\s+/g, ' ').replace(/^[\s,;:]+|[\s,;:]+$/g, '').trim();
-  return counts.map((count) => ({ ...count, partOfDay: partOfDay.length <= 40 ? partOfDay : '' }));
+  const partOfDayBesideTheCount = remainder.replace(/\(\s*\)/g, ' ').replace(/[()]/g, ' ').replace(/\s+/g, ' ').replace(/^[\s,;:]+|[\s,;:]+$/g, '').trim();
+  const partOfDay = partOfDayBesideTheCount !== ''
+    ? (partOfDayBesideTheCount.length <= 40 ? partOfDayBesideTheCount : '')
+    : (whenTyped.split('·').slice(1).map((part) => part.trim()).find(isAPartOfTheDay) ?? '');
+  return counts.map((count) => ({ ...count, partOfDay }));
+}
+
+const PART_OF_DAY_WORD = '(?:(?:early|late|mid|deep|high|small)[\\s-]+)?(?:dawn|daybreak|sunrise|first light|morning|forenoon|midmorning|midday|noon|afternoon|evening|dusk|sunset|twilight|nightfall|night|midnight|small hours)';
+
+/**
+ * Whether one "·" part of a When line is only a part of the day ("dusk", "early afternoon",
+ * "midday into early afternoon"), read where the count's own part says none. A place or a remark
+ * in that slot is never taken for one.
+ */
+export function isAPartOfTheDay(part: string): boolean {
+  return new RegExp(`^${PART_OF_DAY_WORD}(?:\\s+(?:into|to|and|or|till|until)\\s+${PART_OF_DAY_WORD})*$`, 'i').test(part.trim());
 }
 
 interface SceneUnderConstruction {

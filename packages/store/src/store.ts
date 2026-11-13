@@ -16,7 +16,7 @@ import { sql, type Kysely } from 'kysely';
 import {
   Refusal, type CollisionRecord, type EntryRecord, type FactRecord, type InputOf, type RulingRecord,
   type RunListing, type RunSnapshot, type SavedScene, type SceneInput, type Source, type Store,
-  type ThreadRecord, type Visibility, type ImportedRun, type ClockReading,
+  type ThreadRecord, type Visibility, type ImportedRun, type ClockReading, type ReplacedImport, RunAlreadyExists,
 } from '@timeweft/contract';
 import type { Database } from './database.ts';
 import { applyMigrations } from './migrations.ts';
@@ -27,6 +27,7 @@ import {
 } from './rows.ts';
 import { filterForStory, readWholeRun } from './snapshot.ts';
 import { importRunInto } from './import.ts';
+import { markRunAsImported, replaceImportedRunIn } from './replace-imported-run.ts';
 import { exactCount, looksLikeAnId } from './checks.ts';
 
 type Audience = 'story' | 'author';
@@ -226,8 +227,18 @@ export class PostgresStore implements Store {
   }
 
   async importRun(run: ImportedRun): Promise<RunSnapshot> {
-    await this.database.transaction().execute((transaction) => importRunInto(transaction, run));
+    await this.database.transaction().execute(async (transaction) => {
+      const existing = await transaction.selectFrom('runs').select(['id', 'imported_through']).where('slug', '=', run.slug).executeTakeFirst();
+      if (existing !== undefined) throw new RunAlreadyExists(run.slug, existing.imported_through !== null);
+      await importRunInto(transaction, run);
+      await markRunAsImported(transaction, run.slug);
+    });
     return this.snapshotOf(run.slug, 'author');
+  }
+
+  async replaceImportedRun(run: ImportedRun): Promise<ReplacedImport> {
+    const removed = await this.database.transaction().execute((transaction) => replaceImportedRunIn(transaction, run));
+    return { snapshot: await this.snapshotOf(run.slug, 'author'), removed };
   }
 
   private async writeInRun<Answer>(slug: string, work: (transaction: Kysely<Database>, run: RunRow) => Promise<Answer>): Promise<Answer> {

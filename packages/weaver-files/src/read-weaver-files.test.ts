@@ -45,8 +45,8 @@ test('the When line is kept whole', () => {
 test('readings come off the clocks state.md defines, exactly', () => {
   assert.deepEqual(run.clocks.map((clock) => clock.name), ['Mill clock', 'flood reckoning']);
   assert.deepEqual(run.scenes[0]?.readings, [
-    { clock: 'Mill clock', count: '3', partOfDay: '' },
-    { clock: 'flood reckoning', count: '5', partOfDay: '' },
+    { clock: 'Mill clock', count: '3', partOfDay: 'dusk' },
+    { clock: 'flood reckoning', count: '5', partOfDay: 'dusk' },
   ]);
   assert.deepEqual(run.scenes[1]?.readings, [
     { clock: 'Mill clock', count: '4', partOfDay: 'night' },
@@ -105,9 +105,10 @@ test('the place is the known place the Where line names', () => {
 
 test('only the present situation reaches the last scene, and the stacked rest is counted', () => {
   const situation = run.scenes[4]?.situationAfter ?? '';
-  assert.match(situation, /Current: Mill Day 9 \(flood reckoning day \+11\), evening, the mill kitchen\./);
+  // The Current situation section says the present, so the Clock section's copy of it is left out.
+  assert.doesNotMatch(situation, /Current:/);
   assert.match(situation, /The miller sits up with the lantern \(Scene 5\)\./);
-  assert.match(situation, /Run began: the eve of the flood/);
+  assert.doesNotMatch(situation, /Run began/);
   assert.doesNotMatch(situation, /long wait in the rain|paid the toll|waited out/);
   for (const scene of run.scenes.slice(0, 4)) assert.equal(scene.situationAfter, '');
   const report = run.unplaced.filter((line) => /bytes of stacked history/.test(line));
@@ -265,7 +266,8 @@ test('everything not placed is said, by file, line and reason', () => {
   assert.ok(reasons.some((line) => /^cast\.md line \d+: a bullet with neither a label nor a scene number/.test(line)));
   assert.ok(reasons.some((line) => /^places\.md line \d+: a line among the legs/.test(line)));
   assert.ok(reasons.some((line) => /^places\.md line \d+: a bullet among the legs that does not read/.test(line)));
-  assert.equal(reasons.length, 7);
+  assert.ok(reasons.some((line) => /^state\.md line \d+: the Clock section's "Current:" line was not carried/.test(line)));
+  assert.equal(reasons.length, 8);
 });
 
 test('empty files yield nothing and say nothing', () => {

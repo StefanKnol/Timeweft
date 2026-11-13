@@ -206,6 +206,10 @@ export function importedRunInWords(report: ImportedRunReport): string {
     `Imported run ${report.run.slug}: "${report.run.title}".`,
     `${plural(counts.scenes, 'scene', 'scenes')}, ${plural(counts.entries, 'entry', 'entries')}, ${plural(counts.facts, 'fact', 'facts')}, ${plural(counts.trailNotes, 'trail note', 'trail notes')}, ${plural(counts.rulings, 'ruling', 'rulings')}, ${plural(counts.threads, 'thread', 'threads')}, ${plural(counts.waypoints, 'waypoint', 'waypoints')}, ${plural(counts.journeyLegs, 'journey leg', 'journey legs')}, ${plural(counts.clocks, 'clock', 'clocks')}.`,
   ];
+  const removed = report.removedEarlierImport ?? null;
+  if (removed !== null) {
+    lines.push(`It replaced the earlier import, which held ${plural(removed.scenes, 'scene', 'scenes')}, ${plural(removed.entries, 'entry', 'entries')}, ${plural(removed.facts, 'fact', 'facts')}, ${plural(removed.trailNotes, 'trail note', 'trail notes')}, ${plural(removed.rulings, 'ruling', 'rulings')}, ${plural(removed.threads, 'thread', 'threads')}, ${plural(removed.waypoints, 'waypoint', 'waypoints')}, ${plural(removed.journeyLegs, 'journey leg', 'journey legs')}, ${plural(removed.clocks, 'clock', 'clocks')}, and was removed.`);
+  }
   if (report.unplaced.length === 0) {
     lines.push('Every line was placed.');
   } else {

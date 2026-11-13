@@ -267,7 +267,7 @@ export const OPERATIONS = {
     name: 'import_run',
     title: 'Import a run kept by hand',
     description:
-      'Read a run out of the five Markdown files a story kept by hand (log, state, cast, items, places) and write it as one run. A file the run did not keep is left empty; all five empty is refused. A slug already in the store is refused. The answer counts what was read and lists every line the reader could not place.',
+      'Read a run out of the five Markdown files a story kept by hand (log, state, cast, items, places) and write it as one run. A file the run did not keep is left empty; all five empty is refused. A slug already in the store is refused, unless replaceEarlierImport is true and that run holds nothing but an earlier import of it: then the earlier run is removed and the files are imported in its place, in one transaction. The answer counts what was read, and what was removed where an earlier import was replaced, and lists every line the reader could not place.',
     effect: 'writes',
     audience: 'author',
     input: z.object({
@@ -282,6 +282,9 @@ export const OPERATIONS = {
         items: z.string().default(''),
         places: z.string().default(''),
       }).describe('The text of each of the five files.'),
+      replaceEarlierImport: z.boolean().default(false).describe(
+        'True to replace a run of this slug that an earlier import made, with everything it holds, by what these files say. Refused where that run holds anything written after it was imported (a scene saved, a fact or ruling stated, a collision) or where another run continues from it, so nothing but an import is ever removed. Left false, a slug already in the store is refused.',
+      ),
     }),
   }),
   read_run: operation({

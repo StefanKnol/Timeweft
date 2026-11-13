@@ -5,7 +5,7 @@
  * browser, is what lets `node --test` hold it: a rule about which fact holds or which take is
  * struck is tested once, not looked at in a screenshot.
  */
-import { ENTRY_KINDS, OPERATION_ROUTE_PREFIX, OPERATIONS } from '@timeweft/contract';
+import { ENTRY_KINDS, OPERATION_ROUTE_PREFIX, OPERATIONS, isRunAlreadyExistsSentence } from '@timeweft/contract';
 import type {
   ClockReading, ClockRecord, CollisionRecord, EntryKind, EntryNoteRecord, EntryRecord, FactRecord,
   Id, ImportedRunReport, JourneyLegRecord, RequestOf, RulingRecord, RunSnapshot, RunStatus, SceneRecord, ThreadRecord, Visibility, WaypointRecord, WireAnswer,
@@ -655,6 +655,8 @@ export interface ImportForm {
   title: string;
   setting: string;
   status: RunStatus;
+  /** True where the author ticked replacing the earlier import. Left out, nothing is replaced. */
+  replaceEarlierImport?: boolean;
 }
 
 /**
@@ -671,7 +673,36 @@ export function importRunInput(form: ImportForm, textByPart: Partial<Record<Impo
     ...(setting === '' ? {} : { setting }),
     status: form.status,
     files: Object.fromEntries(IMPORT_PARTS.map((part) => [part, textByPart[part] ?? ''])) as Record<ImportPart, string>,
+    ...(form.replaceEarlierImport === true ? { replaceEarlierImport: true } : {}),
   };
+}
+
+/**
+ * The slug the server last refused because a run already has it, or null. Replacing the earlier
+ * import is offered only after that refusal, so nobody removes a run they did not know was there.
+ */
+export function slugRefusedAsExisting(refusal: string, slugSent: string): string | null {
+  return isRunAlreadyExistsSentence(refusal) ? slugSent : null;
+}
+
+/**
+ * Whether the box to replace the earlier import is drawn: only while the slug in the form is the
+ * one the server said already exists. Changing the slug takes the offer away, since the run the
+ * offer was about is no longer the one the import would land on.
+ */
+export function replaceEarlierImportOffered(slugTheServerSaidExists: string | null, slug: string): boolean {
+  return slugTheServerSaidExists !== null && slugTheServerSaidExists === slug;
+}
+
+/** The label of the box, naming the run and saying the picked files are what take its place. */
+export function replaceEarlierImportLabel(slug: string): string {
+  return `Replace the earlier import of "${slug}" with the files picked above. The run it made is removed with everything it holds, and these files are imported in its place. The store refuses this if a story or you wrote anything in that run after it was imported.`;
+}
+
+/** The import button's text: plain, or saying it replaces the earlier import. */
+export function importButtonText(running: boolean, replacing: boolean): string {
+  if (running) return replacing ? 'Replacing…' : 'Importing…';
+  return replacing ? 'Import, replacing the earlier one' : 'Import';
 }
 
 /** The size of a request body as it travels: its JSON, escaping counted, in UTF-8 bytes. */
@@ -715,6 +746,12 @@ export function importCountsInWords(counts: ImportedRunReport['counts']): Array<
     label: IMPORT_COUNT_LABELS[key],
     count: counts[key],
   }));
+}
+
+/** What a replacing import removed, in the same words and order as what it imported, or null where it replaced nothing. */
+export function removedEarlierImportInWords(report: ImportedRunReport): Array<{ label: string; count: number }> | null {
+  const removed = report.removedEarlierImport ?? null;
+  return removed === null ? null : importCountsInWords(removed);
 }
 
 /** The sentence for the lines the reader could not place, singular where there is one. */

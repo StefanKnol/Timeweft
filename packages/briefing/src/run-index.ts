@@ -110,14 +110,45 @@ export function rulingsInForce(index: RunIndex): RulingRecord[] {
     .sort((left, right) => left.number - right.number || compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id));
 }
 
-/** Threads not opened in a struck scene, oldest first. */
+/**
+ * Threads not opened in a struck scene, oldest first. Two threads opened in one scene and written
+ * in one batch keep the order they were written in, never the order of their ids, which are random.
+ */
 export function servableThreads(index: RunIndex): ThreadRecord[] {
+  const writtenPosition = writtenPositionsOfThreads(index);
   return index.snapshot.threads
     .filter((thread) => !wasEstablishedInAStruckScene(index, thread.openedInSceneId))
     .sort((left, right) =>
       (sceneNumberOf(index, left.openedInSceneId) ?? 0) - (sceneNumberOf(index, right.openedInSceneId) ?? 0)
       || compareText(left.createdAt, right.createdAt)
-      || compareText(left.id, right.id));
+      || (writtenPosition.get(left) ?? 0) - (writtenPosition.get(right) ?? 0));
+}
+
+/** Where each thread stands in the snapshot, which is the order the store wrote them in. */
+export function writtenPositionsOfThreads(index: RunIndex): Map<ThreadRecord, number> {
+  return new Map(index.snapshot.threads.map((thread, position) => [thread, position]));
+}
+
+/**
+ * The open threads a briefing serves, newest first: by the number of the scene each was opened in,
+ * the newest scene first; then by when it was written, the latest first; then by its place in the
+ * snapshot, the latest first. A thread whose opening scene is not known, because none was recorded
+ * or the one named is not in the run, comes after every thread whose scene is known, in the order
+ * it was written, the latest first. Never by id, since ids are random.
+ */
+export function openThreadsNewestFirst(index: RunIndex): ThreadRecord[] {
+  const writtenPosition = writtenPositionsOfThreads(index);
+  return servableThreads(index)
+    .filter((thread) => thread.closedInSceneId === null)
+    .sort((left, right) => {
+      const leftScene = sceneNumberOf(index, left.openedInSceneId);
+      const rightScene = sceneNumberOf(index, right.openedInSceneId);
+      if (leftScene === null && rightScene !== null) return 1;
+      if (leftScene !== null && rightScene === null) return -1;
+      return (rightScene ?? 0) - (leftScene ?? 0)
+        || compareText(right.createdAt, left.createdAt)
+        || (writtenPosition.get(right) ?? 0) - (writtenPosition.get(left) ?? 0);
+    });
 }
 
 export function entryNameOf(index: RunIndex, entryId: Id): string | null {
