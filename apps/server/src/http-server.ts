@@ -9,7 +9,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { buildStampFromEnvironment } from './build-stamp.ts';
-import { OPERATION_ROUTE_PREFIX, Refusal, type Store, type WireAnswer } from '@timeweft/contract';
+import { OPERATION_ROUTE_PREFIX, Refusal, type OperationName, type Store, type WireAnswer } from '@timeweft/contract';
 import { carriesTheToken, type AccessSettings } from './access.ts';
 import { serveMcpRequest } from './mcp.ts';
 import { isOperationName, runOperation } from './operations.ts';
@@ -17,6 +17,19 @@ import { staticFileFor } from './static-files.ts';
 
 /** The largest body a request may carry. A scene with a long record is far below it. */
 export const LARGEST_BODY_BYTES = 5 * 1024 * 1024;
+
+/**
+ * The routes that may carry more than the default, as the wire says. An import carries five
+ * whole files, which a run kept by hand for a long while can make far larger than any scene.
+ */
+export const LARGEST_BODY_BYTES_BY_OPERATION: Partial<Record<OperationName, number>> = {
+  import_run: 24 * 1024 * 1024,
+};
+
+/** The largest body one operation's route takes. */
+export function largestBodyBytesFor(name: OperationName): number {
+  return LARGEST_BODY_BYTES_BY_OPERATION[name] ?? LARGEST_BODY_BYTES;
+}
 
 export const MCP_PATH = '/mcp';
 
@@ -26,7 +39,15 @@ export interface ServerSettings extends AccessSettings {
   webRoot: string | null;
 }
 
-class BodyTooLarge extends Error {}
+/** Thrown while a body is read, carrying the limit it broke so the 413 says the right figure. */
+class BodyTooLarge extends Error {
+  // A plain field, since stripping types leaves no room for a parameter property.
+  readonly largestBytes: number;
+  constructor(largestBytes: number) {
+    super(`The body is larger than ${largestBytes} bytes.`);
+    this.largestBytes = largestBytes;
+  }
+}
 
 /** The request's path, or null where its address cannot be read as a URL. */
 export function readRequestPath(request: IncomingMessage): string | null {
@@ -48,15 +69,19 @@ function sendRefusal(response: ServerResponse, status: number, sentence: string)
   sendJson(response, status, answer);
 }
 
-async function readBody(request: IncomingMessage): Promise<Buffer> {
+/**
+ * The body, refused before a byte is read where content-length already says it is too large, and
+ * counted as it arrives otherwise, since a chunked body declares no length at all.
+ */
+async function readBody(request: IncomingMessage, largestBytes: number): Promise<Buffer> {
   const declared = Number(request.headers['content-length'] ?? '0');
-  if (Number.isFinite(declared) && declared > LARGEST_BODY_BYTES) throw new BodyTooLarge();
+  if (Number.isFinite(declared) && declared > largestBytes) throw new BodyTooLarge(largestBytes);
   const chunks: Buffer[] = [];
   let received = 0;
   for await (const chunk of request) {
     const piece = chunk as Buffer;
     received += piece.length;
-    if (received > LARGEST_BODY_BYTES) throw new BodyTooLarge();
+    if (received > largestBytes) throw new BodyTooLarge(largestBytes);
     chunks.push(piece);
   }
   return Buffer.concat(chunks);
@@ -78,7 +103,10 @@ function isJsonContentType(request: IncomingMessage): boolean {
   return contentType === undefined || /^application\/json\b/i.test(contentType.trim());
 }
 
-const BODY_TOO_LARGE_SENTENCE = `The request body is larger than ${LARGEST_BODY_BYTES / (1024 * 1024)} MB, which is the most this server takes.`;
+/** The 413's sentence, saying the limit of the route that was asked. */
+export function bodyTooLargeSentence(largestBytes: number): string {
+  return `The request body is larger than ${largestBytes / (1024 * 1024)} MB, which is the most this route takes.`;
+}
 
 async function serveOperation(settings: ServerSettings, request: IncomingMessage, response: ServerResponse, path: string): Promise<void> {
   const name = path.slice(OPERATION_ROUTE_PREFIX.length);
@@ -95,7 +123,7 @@ async function serveOperation(settings: ServerSettings, request: IncomingMessage
     sendRefusal(response, 415, 'An operation takes a JSON body, sent as application/json.');
     return;
   }
-  const parsed = parseJsonBody(await readBody(request));
+  const parsed = parseJsonBody(await readBody(request, largestBodyBytesFor(name)));
   if (!parsed.ok) {
     sendRefusal(response, 400, 'The request body is not readable JSON.');
     return;
@@ -116,7 +144,7 @@ async function serveOperation(settings: ServerSettings, request: IncomingMessage
 async function serveMcp(settings: ServerSettings, request: IncomingMessage, response: ServerResponse): Promise<void> {
   let parsedBody: unknown;
   if (request.method === 'POST') {
-    const parsed = parseJsonBody(await readBody(request));
+    const parsed = parseJsonBody(await readBody(request, LARGEST_BODY_BYTES));
     if (!parsed.ok) {
       sendJson(response, 400, { jsonrpc: '2.0', error: { code: -32700, message: 'The request body is not readable JSON.' }, id: null });
       return;
@@ -179,7 +207,7 @@ async function handleWithNothingEscaping(settings: ServerSettings, request: Inco
     if (error instanceof BodyTooLarge) {
       if (!response.headersSent) {
         response.setHeader('connection', 'close');
-        sendRefusal(response, 413, BODY_TOO_LARGE_SENTENCE);
+        sendRefusal(response, 413, bodyTooLargeSentence(error.largestBytes));
       } else {
         response.destroy();
       }

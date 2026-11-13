@@ -234,3 +234,29 @@ td { overflow-wrap: normal; }
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* Importing a run kept by hand. */
+.import-run { margin-top: 1.5rem; }
+.import-run-summary { cursor: pointer; font-weight: bold; }
+.import-parts-heading { font-size: 1rem; margin: 0.6rem 0 0.1rem; }
+.import-parts li, .import-counts li { margin-bottom: 0.15rem; }
+.field-hint { font-size: 0.875rem; margin: 0; }
+.choice-row { border: 1px solid var(--line); border-radius: 4px; padding: 0.35rem 0.75rem 0.5rem; margin: 0.4rem 0 0; }
+.choice-row label { display: inline-flex; align-items: center; gap: 0.3rem; margin-right: 1rem; }
+input[type='radio'] { width: auto; }
+input[type='file'] { padding: 0.3rem; }
+
+/* A long text of the author's own or a long refusal: kept as written, scrolling in its own box. */
+.scrolling-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 20rem;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  margin: 0.5rem 0;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}

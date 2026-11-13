@@ -1,8 +1,9 @@
 import { LoadedMessage, useOperation } from './calling.tsx';
 import { hashOfRoute } from './shaping.ts';
+import { ImportRunSection } from './ImportRunSection.tsx';
 
 export function RunsPage() {
-  const { loaded } = useOperation('list_runs', {});
+  const { loaded, readAgain } = useOperation('list_runs', {});
   return (
     <section aria-labelledby="runs-heading">
       <h1 id="runs-heading">Runs</h1>
@@ -40,6 +41,7 @@ export function RunsPage() {
           ))}
         </ul>
       )}
+      <ImportRunSection onImported={readAgain} />
     </section>
   );
 }

@@ -68,6 +68,18 @@ tools=$(curl -s -X POST "http://127.0.0.1:$port/mcp" -H 'Authorization: Bearer c
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
 echo "$tools" | grep -q '"name":"resume_run"' || fail "the MCP tool list does not offer resume_run."
 
+# A hub may drop the fields of an array's items, so each such parameter says them in words.
+echo "$tools" | grep -q 'statedByAuthor (' || fail "the MCP tool list does not name statedByAuthor in save_scene's facts."
+
+# The pages import a run kept by hand through this route. Two tiny made-up files, inline.
+imported=$(curl -s -X POST "http://127.0.0.1:$port/api/operations/import_run" \
+  -H 'Authorization: Bearer check-token' -H 'content-type: application/json' \
+  -d '{"slug":"the-mill-ford","files":{"log":"# The Mill Ford - Log\n\n## Scene 1: The crossing\n**When:** the first morning\nThe miller crosses the ford.\n","cast":"# The Mill Ford - Cast\n\n## Ada the miller (she)\n- **Who:** keeps the mill by the ford.\n"}}')
+echo "$imported" | grep -q '"ok":true' || fail "import_run did not import a made-up run."
+runs=$(curl -s -X POST "http://127.0.0.1:$port/api/operations/list_runs" \
+  -H 'Authorization: Bearer check-token' -H 'content-type: application/json' -d '{}')
+echo "$runs" | grep -q '"slug":"the-mill-ford"' || fail "the imported run is not listed."
+
 if docker run --rm "$image" a-command-it-does-not-know >/dev/null 2>&1; then
   fail "an unknown command was accepted."
 fi

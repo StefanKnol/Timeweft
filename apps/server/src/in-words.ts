@@ -8,7 +8,7 @@
  * name.
  */
 import type {
-  AnswerByOperation, Briefing, CollisionRecord, EntryLookup, FactRecord, FoundItem, Id, OperationName,
+  AnswerByOperation, Briefing, ImportedRunReport, CollisionRecord, EntryLookup, FactRecord, FoundItem, Id, OperationName,
   RulingRecord, RunListing, RunSnapshot, SavedScene, SceneInFull, SceneRecord, SceneSummary, ThreadRecord,
 } from '@timeweft/contract';
 
@@ -199,6 +199,21 @@ export function collisionInWords(collision: CollisionRecord, names: NamesInTheRu
   return collisionSentence(names, collision);
 }
 
+/** An import said as counts, then every line the reader could not place, word for word. */
+export function importedRunInWords(report: ImportedRunReport): string {
+  const { counts } = report;
+  const lines = [
+    `Imported run ${report.run.slug}: "${report.run.title}".`,
+    `${plural(counts.scenes, 'scene', 'scenes')}, ${plural(counts.entries, 'entry', 'entries')}, ${plural(counts.facts, 'fact', 'facts')}, ${plural(counts.trailNotes, 'trail note', 'trail notes')}, ${plural(counts.rulings, 'ruling', 'rulings')}, ${plural(counts.threads, 'thread', 'threads')}, ${plural(counts.waypoints, 'waypoint', 'waypoints')}, ${plural(counts.journeyLegs, 'journey leg', 'journey legs')}, ${plural(counts.clocks, 'clock', 'clocks')}.`,
+  ];
+  if (report.unplaced.length === 0) {
+    lines.push('Every line was placed.');
+  } else {
+    lines.push(`${plural(report.unplaced.length, 'line', 'lines')} could not be placed:`, bulletList(report.unplaced, ''));
+  }
+  return lines.join('\n');
+}
+
 /** One rendering per operation, so an operation added to the contract needs a rendering here too. */
 export const ANSWER_IN_WORDS: { [Name in OperationName]: (answer: AnswerByOperation[Name], names: NamesInTheRun) => string } = {
   list_runs: (answer) => runListingsInWords(answer),
@@ -217,4 +232,5 @@ export const ANSWER_IN_WORDS: { [Name in OperationName]: (answer: AnswerByOperat
   list_collisions: (answer, names) => collisionsInWords(answer, names),
   settle_collision: (answer, names) => collisionInWords(answer, names),
   read_run: (answer) => runSnapshotInWords(answer),
+  import_run: (answer) => importedRunInWords(answer),
 };
