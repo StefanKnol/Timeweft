@@ -30,8 +30,12 @@ Node 22.18 or later, pnpm, and PostgreSQL.
    pnpm --filter @timeweft/server start
    ```
 
-4. Import a run a story kept by hand. The folder holds its five files, `log.md`, `state.md`,
-   `cast.md`, `items.md` and `places.md`; give it as an absolute path, since the command runs in
+4. Import a run a story kept by hand. On the pages, open Runs, choose Import a run, and pick its
+   five files, `log.md`, `state.md`, `cast.md`, `items.md` and `places.md` (a file the run did not
+   keep is left out). The answer counts what was read and lists every line that could not be
+   placed.
+
+   The command is the second way. Give the folder as an absolute path, since the command runs in
    `apps/server`. It prints counts only.
 
    ```sh
@@ -78,9 +82,13 @@ database the container is pointed at, so that database is the one thing to back 
 3. Open `http://<host>:4400/` for the pages, and connect a chat to `http://<host>:4400/mcp` with
    the header `Authorization: Bearer <TIMEWEFT_ACCESS_TOKEN>`.
 
-4. Import a run a story kept by hand. Mount the folder holding its five files, read-only, and
-   name it as the container sees it. The files must be readable by everyone, because the
-   container does not run as root. It prints counts only.
+4. Import a run a story kept by hand. On the pages, open Runs, choose Import a run, and pick its
+   five files, `log.md`, `state.md`, `cast.md`, `items.md` and `places.md` (a file the run did not
+   keep is left out). Nothing needs mounting that way.
+
+   The command is the second way. Mount the folder holding the five files, read-only, and name it
+   as the container sees it. The files must be readable by everyone, because the container does
+   not run as root. It prints counts only.
 
    ```sh
    docker run --rm -v /path/to/the/run:/import:ro \
