@@ -47,4 +47,4 @@ jobs:
       - name: Build the image
         run: docker build -t timeweft:check --build-arg TIMEWEFT_BUILD_NUMBER=1 --build-arg TIMEWEFT_BUILD_COMMIT=$(git rev-parse --short=7 HEAD) --build-arg TIMEWEFT_BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ) .
       - name: Start it and ask it things
-        run: sh scripts/check-the-image.sh timeweft:check postgres://timeweft:timeweft@127.0.0.1:5432/timeweft_image
+        run: sh scripts/check-the-image.sh timeweft:check 127.0.0.1 5432 timeweft timeweft timeweft_image

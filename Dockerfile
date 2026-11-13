@@ -5,8 +5,9 @@
 # database is the only thing to back up.
 #
 # One process serves everything on one port: the author's pages, the operations under /api, and
-# the story tools for a chat under /mcp. PostgreSQL is not in the image; give its address in
-# TIMEWEFT_DATABASE_URL. The server makes and updates its own tables when it starts.
+# the story tools for a chat under /mcp. PostgreSQL is not in the image; name it with
+# TIMEWEFT_DATABASE_HOST, TIMEWEFT_DATABASE_USER and TIMEWEFT_DATABASE_PASSWORD. The server makes
+# and updates its own tables when it starts.
 
 # ---------------------------------------------------------------- build
 FROM node:22.22-alpine AS build

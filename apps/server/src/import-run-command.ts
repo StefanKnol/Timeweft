@@ -14,6 +14,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { RUN_STATUSES, Refusal, type RunSnapshot, type RunStatus, type Store, type WeaverFiles } from '@timeweft/contract';
 import { openStore } from '@timeweft/store';
+import { DatabaseAddressNotSet, databaseAddressFromEnvironment } from './database-address.ts';
 import { readWeaverFiles, type ReadWeaverFilesOptions } from '@timeweft/weaver-files';
 
 export interface ImportRequest {
@@ -143,8 +144,14 @@ export async function importRun(store: Store, request: ImportRequest): Promise<s
 
 async function main(): Promise<void> {
   const request = importRequestFromArguments(process.argv.slice(2));
-  const databaseUrl = process.env['TIMEWEFT_DATABASE_URL']?.trim() ?? '';
-  if (databaseUrl === '') throw new Refusal('TIMEWEFT_DATABASE_URL is not set, so there is no store to import into.');
+  let databaseUrl: string;
+  try {
+    databaseUrl = databaseAddressFromEnvironment(process.env);
+  } catch (error) {
+    // The sentence names settings and never their values, so it is safe to say on the console.
+    if (error instanceof DatabaseAddressNotSet) throw new Refusal(error.message);
+    throw error;
+  }
   const schema = process.env['TIMEWEFT_DATABASE_SCHEMA']?.trim();
   const store = await openStore(databaseUrl, schema === undefined || schema === '' ? {} : { schema });
   try {

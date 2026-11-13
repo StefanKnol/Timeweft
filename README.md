@@ -12,10 +12,12 @@ Node 22.18 or later, pnpm, and PostgreSQL.
    createdb timeweft
    ```
 
-2. Set the three environment variables.
+2. Set the environment variables. The database is named in parts; see the table further down.
 
    ```sh
-   export TIMEWEFT_DATABASE_URL=postgres://<user>:<password>@127.0.0.1:5432/timeweft
+   export TIMEWEFT_DATABASE_HOST=127.0.0.1
+   export TIMEWEFT_DATABASE_USER=<user>
+   export TIMEWEFT_DATABASE_PASSWORD=<password>
    export TIMEWEFT_ACCESS_TOKEN=<a long random string>   # every /api and /mcp request carries it
    export PORT=4400                                       # optional; 4400 when unset
    ```
@@ -57,10 +59,21 @@ database the container is pointed at, so that database is the one thing to back 
    docker compose -f compose.yml up -d
    ```
 
-   On a server that runs containers one at a time, give the container three things: the
-   variable `TIMEWEFT_DATABASE_URL` (the PostgreSQL address as the container reaches it), the
-   variable `TIMEWEFT_ACCESS_TOKEN` (long and random), and port 4400. The server makes and
-   updates its own tables when it starts.
+   On a server that runs containers one at a time, give the container port 4400 and these
+   settings. The server makes and updates its own tables when it starts.
+
+   | Setting | Needed | What it is |
+   | --- | --- | --- |
+   | `TIMEWEFT_DATABASE_HOST` | yes | The address of PostgreSQL as the container reaches it: a name or an IP address, nothing else. |
+   | `TIMEWEFT_DATABASE_USER` | yes | The PostgreSQL user. |
+   | `TIMEWEFT_DATABASE_PASSWORD` | yes | Its password, typed as it is. Any character is fine. |
+   | `TIMEWEFT_DATABASE_PORT` | no | 5432 unless set. |
+   | `TIMEWEFT_DATABASE_NAME` | no | `timeweft` unless set. |
+   | `TIMEWEFT_ACCESS_TOKEN` | yes | Long and random. Every request to `/api` and `/mcp` carries it. |
+   | `PORT` | no | The port inside the container. 4400 unless set. |
+
+   A whole address in `TIMEWEFT_DATABASE_URL` is still taken in place of the five database
+   settings, but never beside them.
 
 3. Open `http://<host>:4400/` for the pages, and connect a chat to `http://<host>:4400/mcp` with
    the header `Authorization: Bearer <TIMEWEFT_ACCESS_TOKEN>`.
@@ -71,11 +84,19 @@ database the container is pointed at, so that database is the one thing to back 
 
    ```sh
    docker run --rm -v /path/to/the/run:/import:ro \
-     -e TIMEWEFT_DATABASE_URL=<the same address> \
+     -e TIMEWEFT_DATABASE_HOST=<host> -e TIMEWEFT_DATABASE_USER=<user> \
+     -e TIMEWEFT_DATABASE_PASSWORD=<password> \
      <image> import-run --folder /import --slug <slug>
    ```
 
 `http://<host>:4400/health` needs no token and says which build is running.
+
+### Behind a hub or a proxy
+
+The pages ask for the access token once and send it three ways with every request: as
+`Authorization: Bearer`, in the header `x-timeweft-token`, and in a cookie kept to the folder the
+pages are served from. The server takes any one of them. That is for a hub or proxy that serves
+the pages on its own address and keeps the `Authorization` header for its own sign-in.
 
 The Docker workflow pushes only where the repository has three secrets: `DOCKER_REPOSITORY`
 (the registry host alone), `DOCKER_USERNAME` and `DOCKER_PASSWORD`. Without them it builds the

@@ -132,11 +132,38 @@ test('the server refuses to start without a token unless told it is local', () =
 
 test('the token is matched whole', () => {
   const settings = { accessToken: 'the-token' };
-  assert.equal(carriesTheToken('Bearer the-token', settings), true);
-  assert.equal(carriesTheToken('bearer the-token', settings), true);
-  assert.equal(carriesTheToken('Bearer the-toke', settings), false);
-  assert.equal(carriesTheToken('the-token', settings), false);
-  assert.equal(carriesTheToken(undefined, settings), false);
-  assert.equal(carriesTheToken('Bearer ', { accessToken: '' }), false);
-  assert.equal(carriesTheToken(undefined, { accessToken: null }), true);
+  assert.equal(carriesTheToken({ authorization: 'Bearer the-token' }, settings), true);
+  assert.equal(carriesTheToken({ authorization: 'bearer the-token' }, settings), true);
+  assert.equal(carriesTheToken({ authorization: 'Bearer the-toke' }, settings), false);
+  assert.equal(carriesTheToken({ authorization: 'the-token' }, settings), false);
+  assert.equal(carriesTheToken({}, settings), false);
+  assert.equal(carriesTheToken({ authorization: 'Bearer ' }, { accessToken: '' }), false);
+  assert.equal(carriesTheToken({}, { accessToken: null }), true);
+});
+
+test('the token is taken from the app\'s own header or cookie where something in front keeps Authorization', () => {
+  const settings = { accessToken: 'the token; with=odd characters' };
+  assert.equal(carriesTheToken({ 'x-timeweft-token': 'the token; with=odd characters' }, settings), true);
+  assert.equal(carriesTheToken({ 'x-timeweft-token': 'another token' }, settings), false);
+  assert.equal(carriesTheToken({ cookie: `other=1; timeweft_access_token=${encodeURIComponent('the token; with=odd characters')}; last=2` }, settings), true);
+  assert.equal(carriesTheToken({ cookie: 'timeweft_access_token=another' }, settings), false);
+  assert.equal(carriesTheToken({ cookie: 'not_timeweft_access_token=the%20token' }, { accessToken: 'the token' }), false);
+  assert.equal(carriesTheToken({ cookie: 'timeweft_access_token=%E0%A4%A' }, settings), false, 'a cookie that is not properly encoded is not a token');
+});
+
+test('a header a proxy filled in with something else does not lock the caller out', () => {
+  const settings = { accessToken: 'the-token' };
+  assert.equal(carriesTheToken({ authorization: 'Bearer the-hubs-own-session', 'x-timeweft-token': 'the-token' }, settings), true);
+  assert.equal(carriesTheToken({ authorization: 'Basic something', cookie: 'timeweft_access_token=the-token' }, settings), true);
+  assert.equal(carriesTheToken({ authorization: 'Bearer wrong', 'x-timeweft-token': 'wrong', cookie: 'timeweft_access_token=wrong' }, settings), false);
+});
+
+test('a request is let in over real HTTP by the header alone and by the cookie alone', async () => {
+  const route = `${running.baseUrl}/api/operations/list_runs`;
+  const byHeader = await fetch(route, { method: 'POST', headers: { 'content-type': 'application/json', 'x-timeweft-token': TEST_TOKEN }, body: '{}' });
+  assert.equal(byHeader.status, 200);
+  const byCookie = await fetch(route, { method: 'POST', headers: { 'content-type': 'application/json', cookie: `timeweft_access_token=${encodeURIComponent(TEST_TOKEN)}` }, body: '{}' });
+  assert.equal(byCookie.status, 200);
+  const byNeither = await fetch(route, { method: 'POST', headers: { 'content-type': 'application/json', 'x-timeweft-token': 'wrong' }, body: '{}' });
+  assert.equal(byNeither.status, 401);
 });
