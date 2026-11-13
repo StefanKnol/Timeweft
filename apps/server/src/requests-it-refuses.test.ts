@@ -103,7 +103,8 @@ test('an address that cannot be read is a 400 and never ends the process', async
 test('the health check answers without the token', async () => {
   const response = await fetch(`${running.baseUrl}/health`);
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { ok: true });
+  // Outside a built image nothing stamps the build, so every part of the stamp is null.
+  assert.deepEqual(await response.json(), { ok: true, build: { number: null, commit: null, builtAt: null } });
 });
 
 test('the author\'s pages are served, unknown paths get index.html, and nothing climbs out', async () => {

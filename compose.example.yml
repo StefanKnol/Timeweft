@@ -1,0 +1,36 @@
+# Timeweft beside its own PostgreSQL. Copy this file, change the two secrets, and start it with
+#   docker compose -f compose.yml up -d
+#
+# The database's volume is the only thing that holds the author's canon. Back that up.
+services:
+  database:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: timeweft
+      POSTGRES_PASSWORD: change-this-database-password
+      POSTGRES_DB: timeweft
+    volumes:
+      - timeweft-database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timeweft"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  timeweft:
+    # Build from this repository, or name the image your registry holds instead.
+    build: .
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      TIMEWEFT_DATABASE_URL: postgres://timeweft:change-this-database-password@database:5432/timeweft
+      # Every request to /api and /mcp carries this. Make it long and random.
+      TIMEWEFT_ACCESS_TOKEN: change-this-access-token
+    ports:
+      - "4400:4400"
+
+volumes:
+  timeweft-database:

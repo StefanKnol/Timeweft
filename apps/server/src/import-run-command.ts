@@ -54,23 +54,45 @@ export function importRequestFromArguments(argumentsGiven: string[]): ImportRequ
   return request;
 }
 
-async function readIfThere(path: string): Promise<string> {
+/** The five files a run keeps, by the part of the run each one holds. */
+const RUN_FILE_NAMES = { log: 'log.md', state: 'state.md', cast: 'cast.md', items: 'items.md', places: 'places.md' } as const;
+
+/**
+ * One file's text, or an empty string where the run did not keep that file.
+ *
+ * A file that is there and cannot be read is a refusal that names the file and why. Inside a
+ * container the import runs as an unprivileged user, so a file only its owner may read is the
+ * usual cause, and "the import failed" would leave the author guessing.
+ */
+async function readIfThere(folder: string, fileName: string): Promise<string | null> {
   try {
-    return await readFile(path, 'utf8');
+    return await readFile(join(folder, fileName), 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return null;
+    if (code === 'EACCES' || code === 'EPERM') {
+      throw new Refusal(`${fileName} is in the folder and cannot be read by the user the import runs as. Make the file readable by everyone, then import again.`);
+    }
+    if (code === 'ENOTDIR') throw new Refusal(`${folder} is not a folder.`);
+    if (code === 'EISDIR') throw new Refusal(`${fileName} is a folder where a file was expected.`);
     throw error;
   }
 }
 
+/**
+ * The five files of a run. A file the run did not keep is an empty string, but a folder holding
+ * none of the five is refused: that is a wrong path or a folder that was never mounted, and
+ * importing it would write an empty run under the name asked for.
+ */
 export async function readFolder(folder: string): Promise<WeaverFiles> {
-  return {
-    log: await readIfThere(join(folder, 'log.md')),
-    state: await readIfThere(join(folder, 'state.md')),
-    cast: await readIfThere(join(folder, 'cast.md')),
-    items: await readIfThere(join(folder, 'items.md')),
-    places: await readIfThere(join(folder, 'places.md')),
-  };
+  const names = Object.keys(RUN_FILE_NAMES) as Array<keyof typeof RUN_FILE_NAMES>;
+  const texts = await Promise.all(names.map((name) => readIfThere(folder, RUN_FILE_NAMES[name])));
+  if (texts.every((text) => text === null)) {
+    throw new Refusal(`${folder} holds none of ${Object.values(RUN_FILE_NAMES).join(', ')}. Check the path; inside a container it is the path the folder is mounted at.`);
+  }
+  const files: WeaverFiles = { log: '', state: '', cast: '', items: '', places: '' };
+  names.forEach((name, index) => { files[name] = texts[index] ?? ''; });
+  return files;
 }
 
 /** What the command says: counts, never content. */

@@ -8,6 +8,7 @@
  * that cannot even be read is a 400.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { buildStampFromEnvironment } from './build-stamp.ts';
 import { OPERATION_ROUTE_PREFIX, Refusal, type Store, type WireAnswer } from '@timeweft/contract';
 import { carriesTheToken, type AccessSettings } from './access.ts';
 import { serveMcpRequest } from './mcp.ts';
@@ -145,7 +146,7 @@ async function handleRequest(settings: ServerSettings, request: IncomingMessage,
     return;
   }
   if (path === '/health') {
-    sendJson(response, 200, { ok: true });
+    sendJson(response, 200, { ok: true, build: buildStampFromEnvironment(process.env) });
     return;
   }
   const isApi = path === '/api' || path.startsWith('/api/');

@@ -5,14 +5,15 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { Store } from '@timeweft/contract';
 import { DEFAULT_SERVER_TEST_DATABASE_URL } from './server-for-tests.ts';
-import { importRequestFromArguments, importRun } from './import-run-command.ts';
+import { Refusal } from '@timeweft/contract';
+import { importRequestFromArguments, importRun, readFolder } from './import-run-command.ts';
 
 const runCommand = promisify(execFile);
 
@@ -112,4 +113,49 @@ test('a refused import says nothing from the files on the console', async () => 
   assert.equal(failed.code, 1);
   assert.match(failed.stderr, /refused/);
   assert.ok(!failed.stderr.includes('Bram'));
+});
+
+test('a folder holding none of the five files is refused, so a wrong path never imports an empty run', async () => {
+  const emptyFolder = await mkdtemp(join(tmpdir(), 'timeweft-empty-folder-'));
+  try {
+    await assert.rejects(readFolder(emptyFolder), (error: unknown) => error instanceof Refusal && /holds none of log\.md/.test(error.message));
+    await assert.rejects(readFolder(join(emptyFolder, 'not-there')), (error: unknown) => error instanceof Refusal);
+    await assert.rejects(importRun(store, { folder: emptyFolder, slug: 'never-written' }), Refusal);
+    assert.equal((await store.listRuns()).some((listing) => listing.run.slug === 'never-written'), false);
+  } finally {
+    await rm(emptyFolder, { recursive: true, force: true });
+  }
+});
+
+test('a folder holding only some of the files is read, the rest as empty', async () => {
+  const partFolder = await mkdtemp(join(tmpdir(), 'timeweft-part-folder-'));
+  try {
+    await writeFile(join(partFolder, 'cast.md'), '# Cast\n');
+    const files = await readFolder(partFolder);
+    assert.equal(files.cast, '# Cast\n');
+    assert.equal(files.log, '');
+  } finally {
+    await rm(partFolder, { recursive: true, force: true });
+  }
+});
+
+test('a file that is there and cannot be read is refused by its name', { skip: process.getuid?.() === 0 ? 'root can read any file, so there is nothing to refuse' : false }, async () => {
+  const lockedFolder = await mkdtemp(join(tmpdir(), 'timeweft-locked-folder-'));
+  try {
+    await writeFile(join(lockedFolder, 'log.md'), '# Log\n');
+    await chmod(join(lockedFolder, 'log.md'), 0o000);
+    await assert.rejects(readFolder(lockedFolder), (error: unknown) => error instanceof Refusal && /log\.md is in the folder and cannot be read/.test(error.message));
+  } finally {
+    await rm(lockedFolder, { recursive: true, force: true });
+  }
+});
+
+test('a file name that is a folder is refused by its name', async () => {
+  const oddFolder = await mkdtemp(join(tmpdir(), 'timeweft-odd-folder-'));
+  try {
+    await mkdir(join(oddFolder, 'log.md'));
+    await assert.rejects(readFolder(oddFolder), (error: unknown) => error instanceof Refusal && /log\.md is a folder/.test(error.message));
+  } finally {
+    await rm(oddFolder, { recursive: true, force: true });
+  }
 });
