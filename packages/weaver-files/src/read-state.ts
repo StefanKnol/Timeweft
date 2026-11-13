@@ -6,7 +6,7 @@ import type { ImportedRuling, ImportedRun } from '@timeweft/contract';
 import type { NameFinder } from './names-in-text.ts';
 import {
   bulletsOf, firstParentheticalSceneNumber, lastSceneNumberOfReference,
-  escapeForRegularExpression, leadingParenthetical, linesOf, presentOf, saysTheAuthorGaveIt, type NumberedLine,
+  escapeForRegularExpression, leadingParenthetical, linesOf, presentOf, saysTheAuthorGaveIt, topLevelParentheticals, type NumberedLine,
 } from './text-helpers.ts';
 
 /** A clock read out of the Clock section, with what it takes to read it off a scene's When line. */
@@ -205,23 +205,49 @@ function carriesAClockCount(sentence: string, namedPrefixes: string[][]): boolea
 }
 
 /**
- * Whether a label is a note the author gave: it says "note" and, in it, that the author gave it,
- * as "Note (author, Scene 81)" does. "Note for the author" is not one.
+ * The label a bullet or a sentence opens on and the text after it: everything up to the first colon
+ * that stands outside a parenthesis, so "Note (author, Scene 2: at the ford): ..." keeps its whole
+ * label. Emphasis around the label ("**Label**:", "**Label:**") is taken off. A label is at most
+ * sixty characters on one line; where no colon closes one, or a parenthesis opened before the
+ * colon never closes, there is no label.
+ */
+export function labelOpening(text: string): { label: string; rest: string } | null {
+  const opening = /^\*{0,2}/.exec(text)?.[0].length ?? 0;
+  let depth = 0;
+  for (let index = opening; index < text.length && index - opening <= 62; index += 1) {
+    const character = text[index];
+    if (character === '\n') return null;
+    if (character === '(') depth += 1;
+    if (character === ')' && depth > 0) depth -= 1;
+    if (character === ':' && depth === 0) {
+      const label = text.slice(opening, index).replace(/\*+$/, '').trim();
+      if (label === '' || label.length > 60) return null;
+      return { label, rest: text.slice(index + 1).replace(/^\*{0,2}\s*/, '') };
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether a label is a note the author gave: outside its parentheses it is a short name ending on
+ * "note" ("Note", "Author's note"), and it says the author gave it, as "Note (author, Scene 81)"
+ * does. "Note for the author" is not one, and nor is a sentence that only mentions the author's
+ * note ("the run is at day +9 (see the author's note").
  */
 export function labelIsAnAuthorNote(label: string): boolean {
-  return /\bnote\b/i.test(label) && saysTheAuthorGaveIt(label);
+  const outside = topLevelParentheticals(label).without;
+  return /^(?:[\p{L}'\u2019-]+\s+){0,2}note$/iu.test(outside) && saysTheAuthorGaveIt(label);
 }
 
 /** Whether a sentence opens on an author's note label, "Note (author, Scene 81): ...". */
 function opensOnAnAuthorNote(sentence: string): boolean {
-  const match = /^\*{0,2}([^:\n]{1,60}?)\*{0,2}:/.exec(sentence.trim());
-  return match !== null && labelIsAnAuthorNote(match[1] ?? '');
+  const opening = labelOpening(sentence.trim());
+  return opening !== null && labelIsAnAuthorNote(opening.label);
 }
 
 /** A note by the author in the Clock section, as a ruling stated by the author, word for word. */
 function clockNoteRuling(text: string, names: NameFinder): ImportedRuling {
-  const colonIndex = text.indexOf(':');
-  const label = colonIndex === -1 ? text : text.slice(0, colonIndex);
+  const label = labelOpening(text)?.label ?? text;
   return {
     text,
     source: 'author',
@@ -261,9 +287,9 @@ function readClockSection(section: Section, read: StateRead, names: NameFinder):
   let runBegan: { label: string; value: string; lineNumber: number } | null = null;
   const otherBullets: Array<{ label: string; value: string; text: string; lineNumber: number }> = [];
   for (const bullet of bullets) {
-    const match = /^\*{0,2}([^:\n]{1,60}?)\*{0,2}:\*{0,2}\s*([\s\S]*)$/.exec(bullet.text);
-    const label = (match?.[1] ?? '').trim();
-    const value = (match?.[2] ?? bullet.text).trim();
+    const match = labelOpening(bullet.text);
+    const label = match?.label ?? '';
+    const value = (match?.rest ?? bullet.text).trim();
     if (/^current$/i.test(label)) {
       const { present, stackedBytes } = presentOf(value);
       if (stackedBytes > 0) {
@@ -558,17 +584,64 @@ export function closureOfThread(bulletText: string): string | null {
   return null;
 }
 
+/** What may stand between the bracketed notes of a waypoint bullet without saying anything. */
+const WAYPOINT_FILLER = /[\s.;:,!?\-\u2013\u2014\u2026]/g;
+
 /**
- * Whether a waypoint bullet states no scene to reach: it is empty, or, with emphasis taken off,
- * it is one parenthetical and nothing else but punctuation, such as a note that the waypoint is
- * held by the author outside the files. A bullet that opens on a parenthetical ("(Author, Scene
- * 9) Reach the ford") and then says the scene states one.
+ * The bracketed groups a text is made of, round or square, in order, or null where any text
+ * other than punctuation stands outside them or a bracket never closes.
+ */
+function bracketedGroupsOnly(text: string): string[] | null {
+  const groups: string[] = [];
+  let outside = '';
+  let depth = 0;
+  let inner = '';
+  for (const character of text) {
+    if (character === '(' || character === '[') {
+      if (depth > 0) inner += character;
+      depth += 1;
+      continue;
+    }
+    if ((character === ')' || character === ']') && depth > 0) {
+      depth -= 1;
+      if (depth === 0) {
+        groups.push(inner.trim());
+        inner = '';
+      } else {
+        inner += character;
+      }
+      continue;
+    }
+    if (depth > 0) inner += character;
+    else outside += character;
+  }
+  if (depth > 0 || outside.replace(WAYPOINT_FILLER, '') !== '') return null;
+  return groups;
+}
+
+/** Whether a bracketed note says the waypoint is held or kept by the author, out of the files. */
+function saysTheWaypointIsHeldOutsideTheFiles(note: string): boolean {
+  return /\b(?:held|kept|hidden|reserved)\b/i.test(note)
+    && /\b(?:author|narration|narrative|elsewhere|outside|off[- ]page|files?)\b/i.test(note);
+}
+
+/**
+ * Whether a waypoint bullet states no scene to reach. With emphasis taken off, and past a short
+ * label such as "Waypoint 1:", it is empty, or it is made only of bracketed notes, round or square,
+ * with nothing else but punctuation between them, at least one of which says the waypoint is held
+ * outside the files ("(held author-side; kept out of narration)", "(kept elsewhere)") and none of
+ * which reads as a sentence of its own. A waypoint written wholly as an aside ("(The miller meets
+ * the baker at the ford.)") states its scene and is a waypoint, and so is a bullet that opens on a
+ * parenthetical and then says the scene ("(Author, Scene 9) Reach the ford").
  */
 export function statesNoSceneToReach(bulletText: string): boolean {
-  const plain = withoutEmphasis(bulletText);
-  if (plain.replace(/[\s.;:,!?\-–\u2014]/g, '') === '') return true;
-  const prefix = leadingParenthetical(plain);
-  return prefix !== null && prefix.rest.replace(/[\s.;:,!?\-–\u2014]/g, '') === '';
+  let plain = withoutEmphasis(bulletText);
+  if (plain.replace(WAYPOINT_FILLER, '') === '') return true;
+  const opening = labelOpening(plain);
+  if (opening !== null && opening.label.length <= 30 && !/[()[\]]/.test(opening.label)) plain = opening.rest;
+  const groups = bracketedGroupsOnly(plain);
+  if (groups === null || !groups.some(saysTheWaypointIsHeldOutsideTheFiles)) return false;
+  return groups.every((group) => saysTheWaypointIsHeldOutsideTheFiles(group) || !/[.!?"\u201d]$/.test(group));
 }
 
 function readWaypointSection(section: Section, read: StateRead): void {
@@ -577,7 +650,7 @@ function readWaypointSection(section: Section, read: StateRead): void {
   for (const bullet of bullets) {
     const text = bullet.text.trim();
     if (statesNoSceneToReach(text)) {
-      read.unplaced.push(`state.md line ${bullet.lineNumber}: a waypoint bullet that states no scene to reach, only a note that the waypoint is held outside the files, was not carried; a waypoint held outside the files cannot be imported and can be added in the app.`);
+      read.unplaced.push(`state.md line ${bullet.lineNumber}: a waypoint bullet that states no scene to reach, only a note that the waypoint is held outside the files, was not carried: the files do not say the scene, so the author keeps that waypoint where they hold it.`);
       continue;
     }
     // Reached where the bullet says so at its start, crosses itself out, or says anywhere that it
