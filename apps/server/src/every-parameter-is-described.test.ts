@@ -8,7 +8,9 @@
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { z, type ZodTypeAny } from 'zod';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { OPERATIONS } from '@timeweft/contract';
 import { STORY_TOOL_NAMES } from './mcp.ts';
 import { startServerForTests, type RunningServer } from './server-for-tests.ts';
 
@@ -75,6 +77,33 @@ test('every parameter and every field of every object a parameter carries has a 
   // A walk that found nothing to check would pass on any tool list.
   assert.ok(parametersChecked >= 40, `only ${parametersChecked} parameters were found`);
   assert.ok(itemObjectsChecked >= 8, `only ${itemObjectsChecked} arrays of objects were found`);
+});
+
+/** Whether a contract parameter is a list of objects, under its default and optional. */
+function isArrayOfObjectsInTheContract(parameter: ZodTypeAny): boolean {
+  let current: ZodTypeAny = parameter;
+  while (current instanceof z.ZodDefault || current instanceof z.ZodOptional) current = current._def.innerType as ZodTypeAny;
+  return current instanceof z.ZodArray && current.element instanceof z.ZodObject;
+}
+
+test('every parameter the contract makes a list of objects reaches the client with its items as an object with properties', async () => {
+  // The received schema alone cannot tell a list of objects flattened to a list of anything from
+  // one that never had fields, so which parameters must arrive whole is read from the contract.
+  const { tools } = await client.listTools();
+  const flattened: string[] = [];
+  let checked = 0;
+  for (const name of STORY_TOOL_NAMES) {
+    const received = (tools.find((tool) => tool.name === name)?.inputSchema.properties ?? {}) as Record<string, ReceivedSchema>;
+    const shape = (OPERATIONS[name].input as unknown as z.AnyZodObject).shape as Record<string, ZodTypeAny>;
+    for (const [parameterName, parameter] of Object.entries(shape)) {
+      if (!isArrayOfObjectsInTheContract(parameter)) continue;
+      checked += 1;
+      const items = received[parameterName]?.items;
+      if (items === undefined || !isOfType(items, 'object') || Object.keys(items.properties ?? {}).length === 0) flattened.push(`${name}.${parameterName}`);
+    }
+  }
+  assert.deepEqual(flattened, [], `these lists of objects reach a client with no item fields: ${flattened.join(', ')}`);
+  assert.ok(checked >= 8, `only ${checked} lists of objects were found in the contract`);
 });
 
 test('an array of objects is offered with its items whole: save_scene\'s facts carry statedByAuthor as a property', async () => {

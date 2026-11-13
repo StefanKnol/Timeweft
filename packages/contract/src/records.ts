@@ -249,7 +249,12 @@ export interface CollisionRecord {
   createdAt: string;
 }
 
-/** Everything a run holds, as one value. What the briefing and the reader's pages are built from. */
+/**
+ * Everything a run holds, as one value. What the briefing and the reader's pages are built from.
+ *
+ * Every list is in the order its records were written, unless it says otherwise. A reader may rely
+ * on that: one save writes many records at one moment, so the moment cannot order them.
+ */
 export interface RunSnapshot {
   run: RunRecord;
   clocks: ClockRecord[];
