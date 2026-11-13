@@ -4,8 +4,11 @@
  *
  * Every resource is a copy of an answer a story operation gives, made by the operation's own path
  * with the story audience: the briefing is what resume_run answers, and a person is what look_up
- * answers for them. Nothing here reads the store any other way, so nothing author-only can reach
- * an attachment that could not reach the tool (see docs/decisions/0002). A copy goes stale the
+ * answers for them. Nothing here reads the store but through the story operations' snapshot, so
+ * nothing author-only can reach an attachment that could not reach the tool (see
+ * docs/decisions/0002). A person is reached by id where look_up reaches by name, so a person every
+ * one of whose names another entry shares is readable here while look_up refuses each name; the
+ * copy says so. A copy goes stale the
  * moment the story moves on, so each says so in its first line and names the tool for the present.
  */
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -13,7 +16,7 @@ import { completable } from '@modelcontextprotocol/sdk/server/completable.js';
 import { ErrorCode, McpError, type ReadResourceResult, type Resource } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { Refusal, type EntryRecord, type RunSnapshot, type Store } from '@timeweft/contract';
-import { byteLengthOf, cutToFit, factsHoldingFor, lookUpEntryById, mainCharactersOf, onOneLine } from '@timeweft/briefing';
+import { byteLengthOf, cutToFit, factsHoldingFor, lookUpEntryById, mainCharactersOf, onOneLine, resolveEntryByName } from '@timeweft/briefing';
 import { entryLookupInWords, namesInTheRun } from './in-words.ts';
 import { parseOperationInput, runOperation, snapshotForOperation } from './operations.ts';
 import { resumeRunWithinItsWholeBudget } from './resume-run-over-mcp.ts';
@@ -23,6 +26,8 @@ export const PERSON_URI_TEMPLATE = 'timeweft://runs/{run}/people/{entry}';
 
 export const BRIEFING_COPY_LINE = 'This is a copy of the briefing, made when it was attached. resume_run gives the present.';
 export const PERSON_COPY_LINE = 'This is a copy of what look_up answered, made when it was attached. look_up gives the present.';
+/** The copy line for a person look_up cannot reach, since every name they go by is shared. */
+export const PERSON_NOT_REACHED_BY_NAME_COPY_LINE = 'This is a copy of what look_up gives for this person, made by their id when it was attached. look_up cannot reach them by name now, since another entry shares every name they go by.';
 
 /** The most a person's attached text may hold. A chat attaches several at once. */
 export const LONGEST_ATTACHED_PERSON_BYTES = 60_000;
@@ -110,7 +115,20 @@ export async function readPerson(store: Store, runSlug: string, entryId: string)
   const person = snapshot.entries.find((candidate) => candidate.id === entryId && candidate.kind === 'person');
   if (person === undefined) throw new Refusal(`No person of the run "${runSlug}" has the id "${entryId}". The list of resources says who may be attached.`);
   const asked = parseOperationInput('look_up', { run: runSlug, name: person.name }, 'story');
-  return `${PERSON_COPY_LINE}\n\n${lookUpWordsThatFit(snapshot, entryId, { withHistory: asked.withHistory, trail: asked.trail })}`;
+  const copyLine = lookUpReachesByName(snapshot, person) ? PERSON_COPY_LINE : PERSON_NOT_REACHED_BY_NAME_COPY_LINE;
+  return `${copyLine}\n\n${lookUpWordsThatFit(snapshot, entryId, { withHistory: asked.withHistory, trail: asked.trail }, copyLine)}`;
+}
+
+/** Whether look_up, asked by some name the person goes by, answers with them rather than refusing. */
+function lookUpReachesByName(snapshot: RunSnapshot, person: EntryRecord): boolean {
+  return [person.name, ...person.alsoKnownAs].some((name) => {
+    try {
+      return resolveEntryByName(snapshot, name) !== null;
+    } catch (error) {
+      if (error instanceof Refusal) return false;
+      throw error;
+    }
+  });
 }
 
 /**
@@ -119,7 +137,9 @@ export async function readPerson(store: Store, runSlug: string, entryId: string)
  * text says how many were left out; where even no trail is too large, the text itself is cut and
  * says so. Either way it names look_up as where the whole is.
  */
-export function lookUpWordsThatFit(snapshot: RunSnapshot, entryId: string, options: { withHistory: boolean; trail: number }): string {
+export function lookUpWordsThatFit(
+  snapshot: RunSnapshot, entryId: string, options: { withHistory: boolean; trail: number }, copyLine: string = PERSON_COPY_LINE,
+): string {
   const names = namesInTheRun(snapshot);
   const inWords = (trail: number): { text: string; trailServed: number } => {
     const lookup = lookUpEntryById(snapshot, entryId, { withHistory: options.withHistory, trail });
@@ -127,7 +147,7 @@ export function lookUpWordsThatFit(snapshot: RunSnapshot, entryId: string, optio
     return { text: entryLookupInWords(lookup, names), trailServed: lookup.trail.length };
   };
   const asLookUpAnswers = inWords(options.trail);
-  const room = LONGEST_ATTACHED_PERSON_BYTES - byteLengthOf(PERSON_COPY_LINE) - 2;
+  const room = LONGEST_ATTACHED_PERSON_BYTES - byteLengthOf(copyLine) - 2;
   if (byteLengthOf(asLookUpAnswers.text) <= room) return asLookUpAnswers.text;
   for (let trail = asLookUpAnswers.trailServed - 1; trail >= 0; trail -= 1) {
     const leftOut = asLookUpAnswers.trailServed - trail;
@@ -180,7 +200,7 @@ export function registerTheAttachments(server: McpServer, store: Store): void {
     argsSchema: {
       run: completable(z.string().min(1).describe("The run's slug, as list_runs gives it."), async (typed) => {
         const runs = await runsAStoryMaySee(store);
-        return runs.map((run) => run.slug);
+        return runs.map((run) => run.slug).filter((slug) => slug.startsWith(typed.trim().toLowerCase()));
       }),
     },
   }, async ({ run }) => {

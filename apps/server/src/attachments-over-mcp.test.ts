@@ -9,7 +9,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { ImportedRun, RunSnapshot } from '@timeweft/contract';
 import { startServerForTests, type RunningServer } from './server-for-tests.ts';
 import {
-  BRIEFING_COPY_LINE, LONGEST_ATTACHED_PERSON_BYTES, PERSON_COPY_LINE, briefingUri, lookUpWordsThatFit, personUri,
+  BRIEFING_COPY_LINE, LONGEST_ATTACHED_PERSON_BYTES, PERSON_COPY_LINE, PERSON_NOT_REACHED_BY_NAME_COPY_LINE, briefingUri, lookUpWordsThatFit, personUri,
 } from './attachments.ts';
 
 const MARKER = 'SEALED-MARKER-77d2';
@@ -48,6 +48,8 @@ function fordRun(): ImportedRun {
       person('Odo', 4, { alsoKnownAs: ['the carter'] }),
       ...Array.from({ length: 10 }, (_, position) => person(`Villager ${String(position).padStart(2, '0')}`, 3)),
       person('Wil the latecomer', 0),
+      person('Pip', 1),
+      person('Pip', 1),
       person(`the ${MARKER} stranger`, 20, { visibility: 'author-only' }),
       { name: 'the ford', kind: 'place', alsoKnownAs: [], pronoun: '', introducedInScene: 1, visibility: 'open', facts: [], trail: [{ scene: 1, text: 'The water is low.' }] },
     ],
@@ -148,6 +150,20 @@ test('an open person outside the ten is still readable, so an attached pointer k
   assert.match(text, /Wil the latecomer \(person\)/);
 });
 
+test('a person look_up cannot reach by name is still read by id, and the copy says look_up refuses the name', async () => {
+  const pips = snapshot.entries.filter((entry) => entry.name === 'Pip');
+  assert.equal(pips.length, 2);
+  const refused = await client.callTool({ name: 'look_up', arguments: { run: SLUG, name: 'Pip' } });
+  assert.equal(refused.isError, true, 'look_up refuses a name two people share');
+  for (const pip of pips) {
+    const text = await readText(personUri(SLUG, pip.id));
+    assert.ok(text.startsWith(`${PERSON_NOT_REACHED_BY_NAME_COPY_LINE}\n\n`), text.slice(0, 200));
+    assert.ok(!text.includes(PERSON_COPY_LINE));
+  }
+  const odo = await readText(personUri(SLUG, idOf(snapshot, 'Odo', 'the miller')));
+  assert.ok(odo.startsWith(`${PERSON_COPY_LINE}\n\n`), 'a shared name with one of their own is reachable, so the ordinary line');
+});
+
 test('what may not be attached is refused in a plain sentence that leaks nothing', async () => {
   const hiddenId = (await running.call('read_run', { run: SLUG })).body.answer as RunSnapshot;
   const hidden = hiddenId.entries.find((entry) => entry.name.includes(MARKER));
@@ -177,8 +193,9 @@ test('a person whose look_up answers past the limit is cut to the newest trail, 
   assert.ok(Buffer.byteLength(whole, 'utf8') > LONGEST_ATTACHED_PERSON_BYTES, 'the demo run must answer past the limit for this test to mean anything');
   const text = await readText(personUri(OTHER_SLUG, id));
   assert.ok(Buffer.byteLength(text, 'utf8') <= LONGEST_ATTACHED_PERSON_BYTES);
-  assert.match(text, /Loaf 7\./, 'the newest note is kept');
-  assert.doesNotMatch(text, /Loaf 0\./, 'the oldest note is the one left out');
+  // The odd loaves are the notes of scene 2, the newest scene: all of them are kept.
+  for (const newest of [1, 3, 5, 7]) assert.match(text, new RegExp(`scene 2: Loaf ${newest}\\.`), `loaf ${newest} is among the newest`);
+  assert.equal(text.match(/^- scene 1: Loaf/gm)?.length ?? 0, 1, 'of the older scene, only what fits is kept');
   assert.match(text, /of the newest 8 trail notes look_up gives were left out of it; look_up gives them whole\./);
 });
 

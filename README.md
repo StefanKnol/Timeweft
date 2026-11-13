@@ -45,6 +45,12 @@ Node 22.18 or later, pnpm, and PostgreSQL.
 5. Connect a chat over MCP (Streamable HTTP) at `http://<host>:<PORT>/mcp`, with the header
    `Authorization: Bearer <TIMEWEFT_ACCESS_TOKEN>`. The chat is offered the story operations only.
 
+   From the connector's menu the chat can also attach a run's briefing, or one of a run's main
+   characters (the main character and the ten people with the longest trails), and start from
+   the prompt *Continue a run*, which asks for the run's slug. An attachment is a copy made when
+   it was attached, of what `resume_run` or `look_up` answered; the tools give the present. See
+   `docs/decisions/0002-resources-are-copies-of-story-answers.md`.
+
 ## Running it in a container
 
 The image holds the app and nothing else. Everything the author writes lives in the PostgreSQL

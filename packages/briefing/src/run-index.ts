@@ -30,7 +30,7 @@ export function compareText(left: string, right: string): number {
 }
 
 export function compareScenesOldestFirst(left: SceneRecord, right: SceneRecord): number {
-  return left.number - right.number || compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id);
+  return left.number - right.number || compareText(left.createdAt, right.createdAt);
 }
 
 export function indexRun(snapshot: RunSnapshot): RunIndex {
@@ -74,40 +74,42 @@ export function newestStandingScene(index: RunIndex): SceneRecord | null {
   return index.standingScenes[index.standingScenes.length - 1] ?? null;
 }
 
-/** Holding facts of one entry: still open, and not from a struck scene. Ordered for reading. */
+/**
+ * Holding facts of one entry: still open, and not from a struck scene. Ordered for reading. Things
+ * written at one moment keep the order they were written in; no order here falls back on an id,
+ * which is random and would differ between two stores holding the same run.
+ */
 export function holdingFactsOf(index: RunIndex, entryId: Id): FactRecord[] {
   const facts = (index.servableFactsByEntry.get(entryId) ?? []).filter((fact) => fact.untilSceneId === null);
   return facts.sort((left, right) =>
     compareText(left.property, right.property)
     || (sceneNumberOf(index, left.fromSceneId) ?? 0) - (sceneNumberOf(index, right.fromSceneId) ?? 0)
-    || compareText(left.createdAt, right.createdAt)
-    || compareText(left.id, right.id));
+    || compareText(left.createdAt, right.createdAt));
 }
 
 /** The facts that no longer hold, newest first: by the scene that closed them, then the one that began them. */
 export function closedFactsOf(index: RunIndex, entryId: Id): FactRecord[] {
   const facts = (index.servableFactsByEntry.get(entryId) ?? []).filter((fact) => fact.untilSceneId !== null);
-  return facts.sort((left, right) =>
+  // Turned round first: a sort keeps equal things in the order it met them, and the newest written comes first here.
+  return facts.reverse().sort((left, right) =>
     (sceneNumberOf(index, right.untilSceneId) ?? 0) - (sceneNumberOf(index, left.untilSceneId) ?? 0)
     || (sceneNumberOf(index, right.fromSceneId) ?? 0) - (sceneNumberOf(index, left.fromSceneId) ?? 0)
-    || compareText(right.createdAt, left.createdAt)
-    || compareText(right.id, left.id));
+    || compareText(right.createdAt, left.createdAt));
 }
 
 /** One entry's trail, newest first. */
 export function trailNewestFirstOf(index: RunIndex, entryId: Id): EntryNoteRecord[] {
   const notes = [...(index.servableNotesByEntry.get(entryId) ?? [])];
-  return notes.sort((left, right) =>
+  return notes.reverse().sort((left, right) =>
     (sceneNumberOf(index, right.sceneId) ?? 0) - (sceneNumberOf(index, left.sceneId) ?? 0)
-    || compareText(right.createdAt, left.createdAt)
-    || compareText(right.id, left.id));
+    || compareText(right.createdAt, left.createdAt));
 }
 
 /** Rulings still in force and not given in a struck scene, oldest first by their number. */
 export function rulingsInForce(index: RunIndex): RulingRecord[] {
   return index.snapshot.rulings
     .filter((ruling) => ruling.withdrawnInSceneId === null && !wasEstablishedInAStruckScene(index, ruling.sceneId))
-    .sort((left, right) => left.number - right.number || compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id));
+    .sort((left, right) => left.number - right.number || compareText(left.createdAt, right.createdAt));
 }
 
 /**

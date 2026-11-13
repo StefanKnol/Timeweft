@@ -152,6 +152,22 @@ describe('threadsOpenFor', () => {
   });
 });
 
+describe('what one save wrote at one moment', () => {
+  it('is read back in the order it was written, never in the order of the ids', () => {
+    const run = millerRun();
+    const note = run.notes[0];
+    assert.ok(note);
+    run.notes.push(
+      { ...note, id: 'zz-written-first', text: 'She barred the sluice first.' },
+      { ...note, id: 'aa-written-second', text: 'Then she lit the lamp.' },
+    );
+    const entry = run.entries.find((each) => each.id === note.entryId);
+    assert.ok(entry);
+    const trail = lookUpEntry(run, entry.name, { withHistory: false, trail: 50 }).trail.map((each) => each.note.text);
+    assert.ok(trail.indexOf('Then she lit the lamp.') < trail.indexOf('She barred the sluice first.'), 'the trail is newest first, so the later written note leads');
+  });
+});
+
 describe('sceneInFull', () => {
   it('answers the standing take of a scene and what it established', () => {
     const full = sceneInFull(millerRun(), 3);
