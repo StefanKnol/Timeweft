@@ -152,7 +152,7 @@ async function handleRequest(settings: ServerSettings, request: IncomingMessage,
   const isApi = path === '/api' || path.startsWith('/api/');
   const isMcp = path === MCP_PATH || path.startsWith(`${MCP_PATH}/`);
   if (isApi || isMcp) {
-    if (!carriesTheToken(request.headers['authorization'], settings)) {
+    if (!carriesTheToken(request.headers, settings)) {
       response.setHeader('www-authenticate', 'Bearer');
       sendRefusal(response, 401, 'This server needs the access token, as "Authorization: Bearer <token>".');
       return;

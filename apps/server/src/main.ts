@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { openStore } from '@timeweft/store';
 import { accessSettingsFromEnvironment } from './access.ts';
+import { databaseAddressFromEnvironment } from './database-address.ts';
 import { createTimeweftServer } from './http-server.ts';
 
 const DEFAULT_PORT = 4400;
@@ -21,8 +22,7 @@ function portFromEnvironment(text: string | undefined): number {
 }
 
 async function main(): Promise<void> {
-  const databaseUrl = process.env['TIMEWEFT_DATABASE_URL']?.trim() ?? '';
-  if (databaseUrl === '') throw new Error('TIMEWEFT_DATABASE_URL is not set, so there is no store to serve. Set it to the PostgreSQL address.');
+  const databaseUrl = databaseAddressFromEnvironment(process.env);
   const access = accessSettingsFromEnvironment(process.env);
   const port = portFromEnvironment(process.env['PORT']);
   const schema = process.env['TIMEWEFT_DATABASE_SCHEMA']?.trim();

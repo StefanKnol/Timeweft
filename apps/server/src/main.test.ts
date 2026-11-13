@@ -37,7 +37,10 @@ async function failureOf(environment: NodeJS.ProcessEnv): Promise<{ code: number
 test('it refuses to start without a database or without a token', async () => {
   const withoutDatabase = await failureOf({ ...environmentWithout('TIMEWEFT_DATABASE_URL'), TIMEWEFT_ACCESS_TOKEN: TEST_TOKEN });
   assert.equal(withoutDatabase.code, 1);
-  assert.match(withoutDatabase.stderr, /TIMEWEFT_DATABASE_URL is not set/);
+  assert.match(withoutDatabase.stderr, /The database is not named: TIMEWEFT_DATABASE_HOST, TIMEWEFT_DATABASE_USER, TIMEWEFT_DATABASE_PASSWORD are not set/);
+  const namedTwice = await failureOf({ ...process.env, TIMEWEFT_DATABASE_URL: DATABASE_URL, TIMEWEFT_DATABASE_HOST: '127.0.0.1', TIMEWEFT_ACCESS_TOKEN: TEST_TOKEN });
+  assert.equal(namedTwice.code, 1);
+  assert.match(namedTwice.stderr, /two answers to where the database is/);
   const withoutToken = await failureOf({ ...environmentWithout('TIMEWEFT_ACCESS_TOKEN', 'TIMEWEFT_ALLOW_NO_TOKEN'), TIMEWEFT_DATABASE_URL: DATABASE_URL });
   assert.equal(withoutToken.code, 1);
   assert.match(withoutToken.stderr, /TIMEWEFT_ACCESS_TOKEN is not set/);

@@ -6,7 +6,8 @@
 #
 # An import reads a folder, so mount it first, read-only, and name it as the container sees it:
 #
-#   docker run --rm -v /path/to/the/run:/import:ro -e TIMEWEFT_DATABASE_URL=... <image> \
+#   docker run --rm -v /path/to/the/run:/import:ro -e TIMEWEFT_DATABASE_HOST=... \
+#     -e TIMEWEFT_DATABASE_USER=... -e TIMEWEFT_DATABASE_PASSWORD=... <image> \
 #     import-run --folder /import --slug <slug>
 set -eu
 

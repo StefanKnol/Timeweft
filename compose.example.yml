@@ -26,7 +26,10 @@ services:
       database:
         condition: service_healthy
     environment:
-      TIMEWEFT_DATABASE_URL: postgres://timeweft:change-this-database-password@database:5432/timeweft
+      TIMEWEFT_DATABASE_HOST: database
+      TIMEWEFT_DATABASE_USER: timeweft
+      TIMEWEFT_DATABASE_PASSWORD: change-this-database-password
+      # TIMEWEFT_DATABASE_PORT is 5432 and TIMEWEFT_DATABASE_NAME is timeweft unless set.
       # Every request to /api and /mcp carries this. Make it long and random.
       TIMEWEFT_ACCESS_TOKEN: change-this-access-token
     ports:
