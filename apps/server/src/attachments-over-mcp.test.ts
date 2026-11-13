@@ -109,6 +109,17 @@ test('the server says at initialize that it offers resources, prompts and comple
   assert.ok(capabilities?.tools, 'tools are still offered');
 });
 
+test('every listed resource says which one it is in its title, since that is what a menu shows', async () => {
+  const { resources } = await client.listResources();
+  assert.ok(resources.length > 2);
+  for (const resource of resources) assert.equal(resource.title, resource.name, `${resource.uri} is titled "${String(resource.title)}"`);
+  const titles = resources.map((resource) => resource.title);
+  assert.ok(titles.includes('Briefing: The Ford Crossing'), titles.join(' | '));
+  assert.ok(titles.includes('Hild the baker (The Ford Crossing)'), titles.join(' | '));
+  assert.equal(new Set(resources.filter((resource) => resource.uri.includes('/briefing')).map((resource) => resource.title)).size,
+    resources.filter((resource) => resource.uri.includes('/briefing')).length, 'two runs are two different titles');
+});
+
 test('the list holds a briefing per run, then the main character and the ten longest trails, by id', async () => {
   const { resources } = await client.listResources();
   const uris = resources.map((resource) => resource.uri);

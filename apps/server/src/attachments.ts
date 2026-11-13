@@ -76,6 +76,9 @@ async function listBriefings(store: Store): Promise<Resource[]> {
   return (await runsAStoryMaySee(store)).map((run) => ({
     uri: briefingUri(run.slug),
     name: `Briefing: ${run.title}`,
+    // Its own title, since a client's menu shows the title, and a listed resource with none is
+    // given its template's, which says what kind of thing it is and not which one.
+    title: `Briefing: ${run.title}`,
     description: `Where ${run.title} stands, as resume_run answers it.`,
     mimeType: 'text/markdown',
   }));
@@ -91,6 +94,7 @@ async function listMainCharacters(store: Store): Promise<Resource[]> {
       resources.push({
         uri: personUri(run.slug, person.id),
         name: `${person.name} (${run.title})`,
+        title: `${person.name} (${run.title})`,
         description: whoTheyAre(snapshot, person, person.id === mainCharacterId),
         mimeType: 'text/markdown',
       });
