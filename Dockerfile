@@ -77,8 +77,9 @@ COPY --from=build /app/apps/web/dist apps/web/dist
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# Where a run's files are mounted for an import. Nothing is kept here.
-RUN mkdir -p /import && chown -R node:node /app /import
+# Where a run's files are mounted for an import, and where a backups folder is mounted. Nothing
+# is kept in either inside the image.
+RUN mkdir -p /import /backups && chown -R node:node /app /import /backups
 
 # Which build this is, stamped by the workflow and reported on /health, so a running container
 # can be told apart from the one before it. Declared after the install so that a value which

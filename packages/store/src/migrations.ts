@@ -406,6 +406,17 @@ export const MIGRATIONS: Migration[] = [
       `alter table thread_touches add column by_author boolean not null default false`,
     ],
   },
+  {
+    number: 7,
+    name: 'a run restored over itself keeps the runs that continue from it',
+    statements: [
+      // Restoring a backup in place of the run it was taken from removes that run and writes it again
+      // under the same id, in one transaction. A run continuing from it points at that id the whole
+      // time, but the check would fire between the removal and the writing. Deferrable, the restore
+      // asks for the check at the end of its transaction; every other write still has it at once.
+      `alter table runs alter constraint runs_continues_run_id_fkey deferrable initially immediate`,
+    ],
+  },
 ];
 
 

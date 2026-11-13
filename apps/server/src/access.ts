@@ -4,15 +4,25 @@
  * This is the first and simplest gate: one shared token, named by TIMEWEFT_ACCESS_TOKEN, carried
  * as "Authorization: Bearer <token>", or in the app's own header or cookie where something in
  * front of the app keeps that header for itself. Whoever holds it over the web routes is the author; whoever
- * holds it over MCP is a story chat and gets the story operations only. Sign-in per person
- * replaces this once more than the author is let in, and each person's grants then decide what
- * they may call.
+ * holds it over MCP is a story chat and gets the story operations only.
+ *
+ * The token a chat's connector keeps is the same one, so whatever holds the connector's settings
+ * could also call the web routes as the author, export_run and restore_run among them. Where
+ * TIMEWEFT_STORY_TOKEN is set, a chat connects with that instead: it opens /mcp and nothing else,
+ * and the access token stays with the author's pages. Unset, the one token opens both, as before.
+ * Sign-in per person replaces this once more than the author is let in, and each person's grants
+ * then decide what they may call.
  */
 import { createHash, timingSafeEqual } from 'node:crypto';
 
 export interface AccessSettings {
   /** The token every /api and /mcp request must carry, or null where the gate is switched off. */
   accessToken: string | null;
+  /**
+   * A second token that opens /mcp only, for the story chats, or null (or left out) where a chat
+   * connects with the access token itself.
+   */
+  storyToken?: string | null;
 }
 
 /**
@@ -21,8 +31,18 @@ export interface AccessSettings {
  */
 export function accessSettingsFromEnvironment(environment: NodeJS.ProcessEnv): AccessSettings {
   const token = environment['TIMEWEFT_ACCESS_TOKEN']?.trim() ?? '';
-  if (token !== '') return { accessToken: token };
-  if (environment['TIMEWEFT_ALLOW_NO_TOKEN'] === 'yes') return { accessToken: null };
+  const storyToken = environment['TIMEWEFT_STORY_TOKEN']?.trim() ?? '';
+  if (token !== '') {
+    if (storyToken === '') return { accessToken: token, storyToken: null };
+    if (storyToken === token) {
+      throw new Error('TIMEWEFT_STORY_TOKEN is the same as TIMEWEFT_ACCESS_TOKEN, so a story chat would still hold the author\'s token. Give it a different long, random value, or leave it out.');
+    }
+    return { accessToken: token, storyToken };
+  }
+  if (storyToken !== '') {
+    throw new Error('TIMEWEFT_STORY_TOKEN is set but TIMEWEFT_ACCESS_TOKEN is not. The story token only narrows a gate the access token closes, so set the access token too.');
+  }
+  if (environment['TIMEWEFT_ALLOW_NO_TOKEN'] === 'yes') return { accessToken: null, storyToken: null };
   throw new Error('TIMEWEFT_ACCESS_TOKEN is not set, so anybody who could reach this server could read and write every run. Set it, or set TIMEWEFT_ALLOW_NO_TOKEN=yes for a local installation nobody else can reach.');
 }
 
@@ -74,7 +94,21 @@ export function tokensOffered(headers: HeadersThatMayCarryTheToken): string[] {
  */
 export function carriesTheToken(headers: HeadersThatMayCarryTheToken, settings: AccessSettings): boolean {
   if (settings.accessToken === null) return true;
-  const expectedDigest = createHash('sha256').update(settings.accessToken).digest();
+  return carriesThisToken(headers, settings.accessToken);
+}
+
+/**
+ * Whether a request may reach /mcp: with the access token, or with the story token where one is
+ * set. The web routes ask `carriesTheToken` alone, so the story token never opens them.
+ */
+export function carriesATokenForStories(headers: HeadersThatMayCarryTheToken, settings: AccessSettings): boolean {
+  if (carriesTheToken(headers, settings)) return true;
+  const storyToken = settings.storyToken ?? null;
+  return storyToken !== null && carriesThisToken(headers, storyToken);
+}
+
+function carriesThisToken(headers: HeadersThatMayCarryTheToken, token: string): boolean {
+  const expectedDigest = createHash('sha256').update(token).digest();
   let carried = false;
   // Every offered token is compared, whether or not an earlier one matched, so the time taken
   // does not say which place the right one was in.

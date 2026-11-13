@@ -11,6 +11,7 @@ import type {
   JourneyLegRecord, RulingRecord, RulingScope, RunEditRecord, RunRecord, RunSnapshot, RunStatus, SceneRecord,
   Source, ThreadRecord, Visibility, WaypointRecord, WaypointRewordingRecord,
 } from './records.ts';
+import type { RestoredRunReport, RunExportDocument } from './run-export.ts';
 
 /** A refusal the caller can act on. Never thrown for a programming fault. */
 export class Refusal extends Error {
@@ -175,6 +176,32 @@ export interface Store {
    * has the slug, the files are imported as `importRun` would and nothing is removed.
    */
   replaceImportedRun(run: ImportedRun): Promise<ReplacedImport>;
+
+  /*
+   * Backups, set down in docs/decisions/0004-export-and-restore.md. Both are the author's alone and
+   * never reached by a story. Rows travel as the store keeps them, never through a record.
+   */
+
+  /**
+   * Every row the run holds, in every table that holds a run's rows, as one document, read inside one
+   * transaction so it is of one moment. Refuses a slug the store lacks.
+   */
+  exportRun(runSlug: string): Promise<RunExportDocument>;
+  /**
+   * Writes a document's rows back exactly as they are, ids, order written, write marks and times
+   * kept, in one transaction, and then moves the store's sequences past the highest values written so
+   * later writes sort after them. The document's outside has been read by `readRunExportDocument`;
+   * the store checks every row against its own columns and refuses a table or a column it does not
+   * know or a column it lacks, naming it.
+   *
+   * Refused, changing nothing: a run with the document's id or slug already there, unless `replace`;
+   * with `replace`, the id and the slug held by two different runs, or another run continuing from
+   * the run to be removed where the document is a different run (another id); the run the document
+   * continues from missing, named by its slug; a row whose id another run already holds.
+   * With `replace`, the run in the way is deleted whole (every run table cascades from it) inside the
+   * same transaction, before the rows are written.
+   */
+  restoreRun(document: RunExportDocument, options: { replace: boolean }): Promise<RestoredRunReport>;
 }
 
 /** How much a run holds, kind by kind. */

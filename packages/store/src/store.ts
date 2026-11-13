@@ -18,7 +18,7 @@ import {
   Refusal, type CollisionRecord, type EntryRecord, type EntryWritten, type FactRecord, type InputOf, type RulingRecord,
   type RunListing, type RunRecord, type RunSnapshot, type SavedScene, type SceneInput, type Source, type Store,
   type ThreadRecord, type Visibility, type ImportedRun, type ClockReading, type ReplacedImport, type WaypointRecord,
-  RunAlreadyExists,
+  type RestoredRunReport, type RunExportDocument, RunAlreadyExists,
 } from '@timeweft/contract';
 import type { Database } from './database.ts';
 import { applyMigrations, WRITE_MARKS } from './migrations.ts';
@@ -31,6 +31,8 @@ import { filterForStory, readThreadRecords, readWholeRun } from './snapshot.ts';
 import { importRunInto } from './import.ts';
 import { markRunAsImported, replaceImportedRunIn } from './replace-imported-run.ts';
 import { exactCount, looksLikeAnId } from './checks.ts';
+import { exportRunFrom } from './export-run.ts';
+import { restoreRunInto } from './restore-run.ts';
 
 type Audience = 'story' | 'author';
 
@@ -475,6 +477,14 @@ export class PostgresStore implements Store {
   async replaceImportedRun(run: ImportedRun): Promise<ReplacedImport> {
     const removed = await this.database.transaction().execute((transaction) => replaceImportedRunIn(transaction, run));
     return { snapshot: await this.snapshotOf(run.slug, 'author'), removed };
+  }
+
+  async exportRun(runSlug: string): Promise<RunExportDocument> {
+    return exportRunFrom(this.database, runSlug);
+  }
+
+  async restoreRun(document: RunExportDocument, options: { replace: boolean }): Promise<RestoredRunReport> {
+    return restoreRunInto(this.database, document, options);
   }
 
   /**

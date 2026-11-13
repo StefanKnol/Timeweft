@@ -28,11 +28,11 @@ export interface RunningServer {
   stop(): Promise<void>;
 }
 
-export async function startServerForTests(options: { webRoot?: string | null; accessToken?: string | null } = {}): Promise<RunningServer> {
+export async function startServerForTests(options: { webRoot?: string | null; accessToken?: string | null; storyToken?: string | null } = {}): Promise<RunningServer> {
   const { openStoreForTests } = await import('@timeweft/store');
   const opened = await openStoreForTests();
   const accessToken = options.accessToken === undefined ? TEST_TOKEN : options.accessToken;
-  const server = createTimeweftServer({ store: opened.store, accessToken, webRoot: options.webRoot ?? null });
+  const server = createTimeweftServer({ store: opened.store, accessToken, storyToken: options.storyToken ?? null, webRoot: options.webRoot ?? null });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as AddressInfo).port;
   const baseUrl = `http://127.0.0.1:${port}`;

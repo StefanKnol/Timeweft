@@ -208,6 +208,22 @@ test('every operation runs end to end', async () => {
   assert.equal(imported.counts.scenes, 1);
   assert.ok(Array.isArray(imported.unplaced));
 
+  // The run as it now stands holds a redo, a settled collision and every act of the author's hand,
+  // so a backup of it carries every kind of row a run has, and a restore puts each back.
+  const backup = await answerOf('export_run', { run: slug });
+  ran.add('export_run');
+  assert.equal(backup.runSlug, slug);
+  assert.equal(backup.tables.collisions.length, 1);
+  assert.ok(backup.tables.run_edits.length > 0 && backup.tables.entry_edits.length > 0 && backup.tables.thread_touches.length > 0);
+
+  const restored = await answerOf('restore_run', { document: backup, replace: true });
+  ran.add('restore_run');
+  assert.equal(restored.run.slug, slug);
+  assert.deepEqual(restored.replaced?.rowsRemoved, restored.rowsRestored, 'replacing a run with its own backup removes what it puts back');
+  const { exportedAt: _takenThen, ...backupAsTaken } = backup;
+  const { exportedAt: _takenNow, ...backupAgain } = await answerOf('export_run', { run: slug });
+  assert.deepEqual(backupAgain, backupAsTaken);
+
   assert.deepEqual([...ran].sort(), [...OPERATION_NAMES].sort(), 'some operation was not run end to end');
 });
 

@@ -7,6 +7,7 @@
  */
 import { z } from 'zod';
 import { ENTRY_KINDS, RULING_SCOPES, RUN_STATUSES, VISIBILITIES } from './records.ts';
+import { RUN_EXPORT_FORMAT_NAME, RUN_SLUG_PATTERN } from './run-export.ts';
 
 /** What an operation does to the store. */
 export const EFFECTS = ['reads', 'writes'] as const;
@@ -126,7 +127,7 @@ export const OPERATIONS = {
     effect: 'writes',
     audience: 'story',
     input: z.object({
-      slug: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/).describe('A short handle in lower case with hyphens.'),
+      slug: z.string().regex(RUN_SLUG_PATTERN).describe('A short handle in lower case with hyphens.'),
       title: z.string().min(1).describe("The story's title."),
       setting: z.string().default('').describe('Where and when it is set, in a sentence or two.'),
       status: z.enum(RUN_STATUSES).default('binding').describe('`binding`, the usual case: what the story establishes is canon at once. `telling`: its facts stay inside the run.'),
@@ -434,7 +435,7 @@ export const OPERATIONS = {
     effect: 'writes',
     audience: 'author',
     input: z.object({
-      slug: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/).describe('A short handle in lower case with hyphens.'),
+      slug: z.string().regex(RUN_SLUG_PATTERN).describe('A short handle in lower case with hyphens.'),
       title: z.string().optional().describe("Left out, the title is read from the files' own heading."),
       setting: z.string().optional().describe('Where and when it is set, in a sentence or two. Left out, empty.'),
       status: z.enum(RUN_STATUSES).optional().describe('`binding` or `telling`. Left out, binding.'),
@@ -457,6 +458,34 @@ export const OPERATIONS = {
     effect: 'reads',
     audience: 'author',
     input: z.object({ run: runHandle }),
+  }),
+  export_run: operation({
+    name: 'export_run',
+    title: 'Export a run',
+    description:
+      'Everything a run holds, author-only material included, as one document a backup file holds: every scene with its struck takes, every fact with its whole history, the trail, rulings, threads and their touches, waypoints and their rewordings, journeys, clocks, collisions, and every change the author made, each row exactly as the store keeps it, ids, order written and times kept. For the author\'s backups; restore_run puts it back.',
+    effect: 'reads',
+    audience: 'author',
+    input: z.object({ run: runHandle }),
+  }),
+  restore_run: operation({
+    name: 'restore_run',
+    title: 'Restore a run from a backup',
+    description:
+      'Put a run back exactly as an export of it held it, ids, order written and times kept, in one transaction. Refused where a run with the same id or the same slug is already in the store, unless replace is true; refused where the run it continues from is not in the store; refused for a document in a format version this server does not read, with a sentence saying which versions it reads.',
+    effect: 'writes',
+    audience: 'author',
+    input: z.object({
+      document: z.object({
+        // Taken as given and checked by the backup's own reader, so a file whose format or version
+        // is missing or of the wrong kind is refused in the same sentence on every door.
+        formatName: z.unknown().describe(`What kind of document this is. A backup of a run says "${RUN_EXPORT_FORMAT_NAME}".`),
+        formatVersion: z.unknown().describe('The version of the format it was written in, as a whole number.'),
+      }).passthrough().describe('The whole content of a backup file, exactly as export_run answered it.'),
+      replace: z.boolean().default(false).describe(
+        'True to remove the run already in the store under this id or slug, with everything it holds, and put the backup in its place, in one transaction, so a refused or failed restore leaves that run as it was. Refused where the id and the slug belong to two different runs, or where another run continues from the run removed and the backup is a different run. Left false, a run already there is refused and nothing is changed.',
+      ),
+    }),
   }),
 } as const;
 

@@ -5,10 +5,13 @@
  * browser, is what lets `node --test` hold it: a rule about which fact holds or which take is
  * struck is tested once, not looked at in a screenshot.
  */
-import { ENTRY_KINDS, OPERATION_ROUTE_PREFIX, OPERATIONS, isRunAlreadyExistsSentence } from '@timeweft/contract';
+import {
+  ENTRY_KINDS, OPERATION_ROUTE_PREFIX, OPERATIONS, RUN_EXPORT_TABLE_IN_WORDS, RUN_EXPORT_TABLE_NAMES, Refusal, backupFileName, isRunAlreadyExistsSentence,
+  readRunExportDocument, runExportDocumentAsText,
+} from '@timeweft/contract';
 import type {
   ClockReading, ClockRecord, CollisionRecord, EntryKind, EntryNoteRecord, EntryRecord, FactRecord,
-  EntryEditRecord, Id, ImportedRunReport, JourneyLegRecord, RequestOf, RulingRecord, RulingScope, RunEditRecord, RunSnapshot, RunStatus, SceneRecord, ThreadRecord, Visibility, WaypointRecord, WireAnswer,
+  EntryEditRecord, Id, ImportedRunReport, RestoredRunReport, RunExportDocument, RunExportRowCounts, RunExportTableName, JourneyLegRecord, RequestOf, RulingRecord, RulingScope, RunEditRecord, RunSnapshot, RunStatus, SceneRecord, ThreadRecord, Visibility, WaypointRecord, WireAnswer,
 } from '@timeweft/contract';
 
 // ---------------------------------------------------------------------------------------------
@@ -714,7 +717,9 @@ export function whySlugIsNotWellFormed(slug: string): string | null {
 
 /** A size in megabytes as a person reads it, for the size refusal. */
 export function megabytesInWords(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  // A whole figure is said whole ("200 MB"), and anything else to one place ("16.3 MB").
+  const megabytes = bytes / (1024 * 1024);
+  return `${Number.isInteger(megabytes) ? megabytes : megabytes.toFixed(1)} MB`;
 }
 
 /**
@@ -853,6 +858,112 @@ export function unplacedInWords(unplacedCount: number): string {
   if (unplacedCount === 0) return 'Every line was placed.';
   if (unplacedCount === 1) return '1 line could not be placed.';
   return `${unplacedCount.toLocaleString('en')} lines could not be placed.`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Backing up a run and restoring one
+
+/**
+ * The largest body the server takes for `restore_run`: the figure of
+ * `LARGEST_BODY_BYTES_BY_OPERATION.restore_run` in apps/server/src/http-server.ts, which the
+ * contract does not hold. A backup is sent whole, so this is also the largest backup the page can
+ * restore.
+ */
+export const LARGEST_RESTORE_BODY_BYTES = 200 * 1024 * 1024;
+
+/**
+ * What the download button saves: the file name the server's own backups use, made from the run's
+ * slug and the moment the backup was taken, and the document written by the contract's one way of
+ * writing a backup out, so a file saved here and one saved by `pnpm export-run` are the same, byte
+ * for byte.
+ */
+export function backupDownloadOf(document: RunExportDocument, takenAt: Date): { fileName: string; text: string } {
+  return { fileName: backupFileName(document.runSlug, takenAt), text: runExportDocumentAsText(document) };
+}
+
+/**
+ * The largest backup file the page reads at all: twice what the server takes. A backup file is
+ * written with two spaces of indentation, and is sent without it, which takes off a fifth to a
+ * third of its size; no backup file shrinks to half. So a file under this may still fit once it
+ * is measured as it would be sent, which `restoreToSend` does, and a file over it never can.
+ */
+export const LARGEST_BACKUP_FILE_BYTES_READ = 2 * LARGEST_RESTORE_BODY_BYTES;
+
+/** The sentence under the download button, saying what the file holds. */
+export const BACKUP_DOWNLOAD_HINT =
+  'Saves everything this run holds, author-only material included, as one file. Keep it somewhere private: it holds what a story must never see. Restore it from the list of runs.';
+
+/** The label of the box that replaces the run already in the store. */
+export const REPLACE_ON_RESTORE_LABEL = 'Replace the run already here';
+
+/** What ticking the box does, said beside it. */
+export const REPLACE_ON_RESTORE_SENTENCE =
+  "Removes the run with this backup's name or id, and everything it holds, and puts the backup in its place. If the restore is refused or fails, that run is left as it was.";
+
+/** The restore button's text: plain, or saying it replaces the run already here. */
+export function restoreButtonText(running: boolean, replacing: boolean): string {
+  if (running) return replacing ? 'Replacing…' : 'Restoring…';
+  return replacing ? 'Restore, replacing the run already here' : 'Restore';
+}
+
+/**
+ * Why the picked backup file cannot be restored, asked before it is read, or null where it may be.
+ * Only a file too large to fit even without its spacing is turned away here; a smaller one is
+ * read and measured as it would be sent.
+ */
+export function whyBackupFileCannotStart(file: { name: string; size: number } | null): string | null {
+  if (file === null) return 'Pick a backup file.';
+  if (file.size === 0) return `The file ${file.name} is empty, so it is not a backup of a run.`;
+  if (file.size > LARGEST_BACKUP_FILE_BYTES_READ) {
+    return `The file comes to ${megabytesInWords(file.size)}. Sent without its spacing it would still be over ${megabytesInWords(LARGEST_RESTORE_BODY_BYTES)}, which is the most a restore takes.`;
+  }
+  return null;
+}
+
+/**
+ * The `restore_run` input from the text of a backup file, or why it cannot be sent. The outside of
+ * the document is checked here with the contract's own reader, so a file of another kind or an
+ * unread version is refused in the same words the server would use, without sending it. The rows
+ * are the store's to check. The body is measured as it will travel and held to the server's limit.
+ */
+export function restoreToSend(
+  fileText: string,
+  replace: boolean,
+): { ok: true; input: RequestOf<'restore_run'>; runSlug: string } | { ok: false; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fileText);
+  } catch {
+    return { ok: false, reason: 'This file is not a Timeweft backup of a run: it is not readable as JSON. The file may have been cut short or edited. Nothing was sent.' };
+  }
+  let document: RunExportDocument;
+  try {
+    document = readRunExportDocument(parsed);
+  } catch (error) {
+    if (error instanceof Refusal) return { ok: false, reason: `${error.message} Nothing was sent.` };
+    throw error;
+  }
+  const input: RequestOf<'restore_run'> = { document: document as unknown as RequestOf<'restore_run'>['document'], replace };
+  const bodyBytes = bodyBytesOf(input);
+  if (bodyBytes > LARGEST_RESTORE_BODY_BYTES) {
+    return {
+      ok: false,
+      reason: `The backup comes to ${megabytesInWords(bodyBytes)} as it would be sent, and the server takes at most ${megabytesInWords(LARGEST_RESTORE_BODY_BYTES)}. Nothing was sent.`,
+    };
+  }
+  return { ok: true, input, runSlug: document.runSlug };
+}
+
+/** Every count of rows, in words, in the order a restore writes them. Counts only, never content. */
+export function runRowCountsInWords(counts: RunExportRowCounts): Array<{ label: string; count: number }> {
+  return RUN_EXPORT_TABLE_NAMES.map((table) => ({ label: RUN_EXPORT_TABLE_IN_WORDS[table], count: counts[table] }));
+}
+
+/** The sentence saying what a restore did, naming the run replaced where there was one. */
+export function restoredInWords(report: RestoredRunReport): string {
+  if (report.replaced === null) return `Restored ${report.run.title} (${report.run.slug}).`;
+  const replaced = report.replaced.run;
+  return `Restored ${report.run.title} (${report.run.slug}), in place of ${replaced.title} (${replaced.slug}), which was removed with everything it held.`;
 }
 
 // ---------------------------------------------------------------------------------------------

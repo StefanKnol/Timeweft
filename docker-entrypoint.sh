@@ -3,6 +3,11 @@
 #
 #   serve                  the server (the default)
 #   import-run <options>   read a run's five Markdown files into the database, then exit
+#   export-run <slug> <file>        write a backup of one run to a file, then exit
+#   export-all <folder>             write a backup of every run into a folder, then exit
+#   restore-run <file> [--replace]  put a run back from a backup file, then exit
+#
+# A backup is written to and read from a mounted folder, named as the container sees it.
 #
 # An import reads a folder, so mount it first, read-only, and name it as the container sees it:
 #
@@ -28,8 +33,11 @@ case "$command" in
   import-run)
     run_node /app/apps/server/src/import-run-command.ts "$@"
     ;;
+  export-run|export-all|restore-run)
+    run_node /app/apps/server/src/backup-commands.ts "$command" "$@"
+    ;;
   *)
-    echo "Timeweft does not know the command \"$command\". It knows: serve, import-run." >&2
+    echo "Timeweft does not know the command \"$command\". It knows: serve, import-run, export-run, export-all, restore-run." >&2
     exit 64
     ;;
 esac

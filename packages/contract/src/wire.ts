@@ -5,10 +5,11 @@
  * The answer is always JSON: `{ ok: true, answer }`, or `{ ok: false, refusal }` with status 400
  * where the store refused, 401 without the access token (sent as `Authorization: Bearer`), 404 for
  * a name that is not an operation, 405 for anything but POST, 413 for a body too large, 415 for a
- * body that is not JSON, and 500 for a fault. A body may be 5 MB, and 24 MB for `import_run`,
- * which carries whole files. Over
- * MCP each operation is a tool of the same name taking the same input, answering with text made
- * for a model to read, plus `{ answer }` as structured content. `resume_run` is the exception: its
+ * body that is not JSON, and 500 for a fault. A body may be 5 MB, 24 MB for `import_run`,
+ * which carries whole files, and 200 MB for `restore_run`, which carries a whole run. The author's
+ * operations (every one whose audience is `author`, `export_run` and `restore_run` among them) are
+ * web routes only. Over MCP each story operation is a tool of the same name taking the same
+ * input, answering with text made for a model to read, plus `{ answer }` as structured content. `resume_run` is the exception: its
  * text is the briefing and its structured content carries only the sizes, so the whole result
  * stays inside the budget asked for.
  *
@@ -21,6 +22,7 @@ import type {
   CollisionRecord, EntryNoteRecord, EntryRecord, FactRecord, JourneyLegRecord, RulingRecord, RunRecord, RunSnapshot,
   SceneRecord, ThreadRecord, WaypointRecord,
 } from './records.ts';
+import type { RestoredRunReport, RunExportDocument } from './run-export.ts';
 
 export const OPERATION_ROUTE_PREFIX = '/api/operations/';
 
@@ -83,6 +85,8 @@ export interface AnswerByOperation {
   settle_collision: CollisionRecord;
   read_run: RunSnapshot;
   import_run: ImportedRunReport;
+  export_run: RunExportDocument;
+  restore_run: RestoredRunReport;
 }
 
 export type WireAnswer<Answer> = { ok: true; answer: Answer } | { ok: false; refusal: string };

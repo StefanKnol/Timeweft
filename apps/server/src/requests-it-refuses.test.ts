@@ -7,8 +7,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { accessSettingsFromEnvironment, carriesTheToken } from './access.ts';
-import { LARGEST_BODY_BYTES } from './http-server.ts';
+import { accessSettingsFromEnvironment, carriesATokenForStories, carriesTheToken } from './access.ts';
+import { LARGEST_BODY_BYTES, LARGEST_OBJECTS_AND_LISTS_PER_BODY, objectsAndListsAtMost } from './http-server.ts';
 import { TEST_TOKEN, sendRawRequest, startServerForTests, statusOfRawAnswer, type RunningServer } from './server-for-tests.ts';
 
 let running: RunningServer;
@@ -126,8 +126,56 @@ test('the author\'s pages are served, unknown paths get index.html, and nothing 
 test('the server refuses to start without a token unless told it is local', () => {
   assert.throws(() => accessSettingsFromEnvironment({}), /TIMEWEFT_ACCESS_TOKEN is not set/);
   assert.throws(() => accessSettingsFromEnvironment({ TIMEWEFT_ALLOW_NO_TOKEN: 'true' }), /TIMEWEFT_ACCESS_TOKEN is not set/);
-  assert.deepEqual(accessSettingsFromEnvironment({ TIMEWEFT_ALLOW_NO_TOKEN: 'yes' }), { accessToken: null });
-  assert.deepEqual(accessSettingsFromEnvironment({ TIMEWEFT_ACCESS_TOKEN: ' the-token ' }), { accessToken: 'the-token' });
+  assert.deepEqual(accessSettingsFromEnvironment({ TIMEWEFT_ALLOW_NO_TOKEN: 'yes' }), { accessToken: null, storyToken: null });
+  assert.deepEqual(accessSettingsFromEnvironment({ TIMEWEFT_ACCESS_TOKEN: ' the-token ' }), { accessToken: 'the-token', storyToken: null });
+});
+
+test('a story token is read from the environment, and refused where it would not narrow anything', () => {
+  assert.deepEqual(
+    accessSettingsFromEnvironment({ TIMEWEFT_ACCESS_TOKEN: 'the-token', TIMEWEFT_STORY_TOKEN: ' the-story-token ' }),
+    { accessToken: 'the-token', storyToken: 'the-story-token' },
+  );
+  assert.throws(() => accessSettingsFromEnvironment({ TIMEWEFT_ACCESS_TOKEN: 'the-token', TIMEWEFT_STORY_TOKEN: 'the-token' }), /is the same as TIMEWEFT_ACCESS_TOKEN/);
+  assert.throws(() => accessSettingsFromEnvironment({ TIMEWEFT_ALLOW_NO_TOKEN: 'yes', TIMEWEFT_STORY_TOKEN: 'the-story-token' }), /TIMEWEFT_ACCESS_TOKEN is not/);
+});
+
+test('the story token opens MCP and never the author\'s routes', async () => {
+  const settings = { accessToken: 'the-token', storyToken: 'the-story-token' };
+  assert.equal(carriesTheToken({ authorization: 'Bearer the-story-token' }, settings), false);
+  assert.equal(carriesATokenForStories({ authorization: 'Bearer the-story-token' }, settings), true);
+  assert.equal(carriesATokenForStories({ authorization: 'Bearer the-token' }, settings), true);
+  assert.equal(carriesATokenForStories({ authorization: 'Bearer the-story-token' }, { accessToken: 'the-token' }), false);
+  const withStoryToken = await startServerForTests({ storyToken: 'a-story-token-for-the-demo-world' });
+  try {
+    const asAStory = { 'content-type': 'application/json', authorization: 'Bearer a-story-token-for-the-demo-world' };
+    for (const name of ['export_run', 'restore_run', 'list_runs']) {
+      const answer = await fetch(`${withStoryToken.baseUrl}/api/operations/${name}`, { method: 'POST', headers: asAStory, body: '{}' });
+      assert.equal(answer.status, 401, `the story token reached ${name} over the web route`);
+    }
+    const mcp = await fetch(`${withStoryToken.baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { ...asAStory, accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'a-story-chat', version: '0.0.0' } } }),
+    });
+    assert.notEqual(mcp.status, 401, 'the story token did not open MCP');
+    await mcp.body?.cancel();
+    const asTheAuthor = await withStoryToken.call('list_runs', {});
+    assert.equal(asTheAuthor.status, 200);
+  } finally {
+    await withStoryToken.stop();
+  }
+});
+
+test('a body holding more objects and lists than any request needs is refused before it is parsed', async () => {
+  assert.equal(objectsAndListsAtMost(Buffer.from('{"a":[1,{"b":"[x{"}]}')), 5);
+  const count = LARGEST_OBJECTS_AND_LISTS_PER_BODY + 10;
+  const body = Buffer.alloc(count * 3 + 1, '{},');
+  body[0] = 0x5b;
+  body.write('{}]', body.length - 3);
+  const response = await post('/api/operations/restore_run', body);
+  assert.equal(response.status, 413);
+  assert.match(((await response.json()) as { refusal: string }).refusal, /objects and lists, far more than any backup/);
+  await stillServing();
 });
 
 test('the token is matched whole', () => {

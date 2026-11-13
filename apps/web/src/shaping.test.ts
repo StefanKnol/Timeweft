@@ -13,7 +13,11 @@ import {
   factToSend, lastingActInWords, newEntryToSend, newestStandingScene, renameToSend, runDetailsFormOf, runEditToSend,
   runHistoryInWords, rulingToSend, rulingsSplitByWithdrawal, standingSceneNumbers, typedTextOrReason, whyAnActNeedsAScene,
   EMPTY_FACT_FORM,
+  LARGEST_BACKUP_FILE_BYTES_READ, LARGEST_RESTORE_BODY_BYTES, REPLACE_ON_RESTORE_SENTENCE, bodyBytesOf, backupDownloadOf, restoreButtonText, restoreToSend,
+  restoredInWords, runRowCountsInWords, whyBackupFileCannotStart,
+  megabytesInWords,
 } from './shaping.ts';
+import { RUN_EXPORT_TABLE_NAMES, runExportDocumentAsText, type RestoredRunReport, type RunExportDocument, type RunExportRowCounts, type RunRecord } from '@timeweft/contract';
 
 // A made-up demo world: a miller, a ferry, a ford and a lantern.
 
@@ -578,4 +582,122 @@ test('cautions are read from an entry write, and any other answer has none', () 
 test('typed text is trimmed, and nothing but spaces is a reason', () => {
   assert.deepEqual(typedTextOrReason('  the ford  ', 'a name'), { ok: true, input: 'the ford' });
   assert.deepEqual(typedTextOrReason(' \n ', 'a name'), { ok: false, reason: 'Write a name first.' });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Backing up a run and restoring one. A made-up demo run: the mill by the ford.
+
+function aBackupOfTheMill(): RunExportDocument {
+  const tables = Object.fromEntries(RUN_EXPORT_TABLE_NAMES.map((name) => [name, []])) as unknown as RunExportDocument['tables'];
+  tables.runs = [{
+    id: 'run-mill', slug: 'the-mill', title: 'The Mill', setting: 'by the ford', status: 'binding',
+    continues_run_id: null, register: '', created_at: '2026-11-13T09:30:00.123456Z', imported_through: null,
+  }];
+  return {
+    formatName: 'timeweft-run-export', formatVersion: 1, exportedAt: '2026-11-13T10:00:00.000001Z',
+    runSlug: 'the-mill', continuesRun: null, tables,
+  };
+}
+
+function countsOf(value: number): RunExportRowCounts {
+  return Object.fromEntries(RUN_EXPORT_TABLE_NAMES.map((name) => [name, value])) as RunExportRowCounts;
+}
+
+function runRecord(slug: string, title: string): RunRecord {
+  return { id: `run-${slug}`, slug, title, setting: '', status: 'binding', continuesRunId: null, register: '', createdAt: '2026-11-13T09:30:00Z' } as RunRecord;
+}
+
+test('a downloaded backup is named as the server names its backups and written as the command writes it', () => {
+  const document = aBackupOfTheMill();
+  const download = backupDownloadOf(document, new Date('2026-11-13T09:30:00.456Z'));
+  assert.equal(download.fileName, 'the-mill--20261113T093000Z.timeweft-run.json');
+  assert.equal(download.text, runExportDocumentAsText(document), 'the same backup taken from the page and by pnpm export-run is the same file');
+  assert.ok(download.text.endsWith('}\n'));
+  assert.deepEqual(JSON.parse(download.text), document);
+});
+
+test('a backup file is asked for, refused when empty and refused when over the restore limit', () => {
+  assert.equal(whyBackupFileCannotStart(null), 'Pick a backup file.');
+  assert.match(whyBackupFileCannotStart({ name: 'the-mill.timeweft-run.json', size: 0 }) ?? '', /is empty/);
+  assert.equal(whyBackupFileCannotStart({ name: 'the-mill.timeweft-run.json', size: LARGEST_RESTORE_BODY_BYTES }), null);
+  // A file a little over the limit may fit once its spacing is dropped, so it is read and measured.
+  assert.equal(whyBackupFileCannotStart({ name: 'the-mill.timeweft-run.json', size: LARGEST_RESTORE_BODY_BYTES + 10 * 1024 * 1024 }), null);
+  assert.equal(whyBackupFileCannotStart({ name: 'the-mill.timeweft-run.json', size: LARGEST_BACKUP_FILE_BYTES_READ }), null);
+  assert.match(whyBackupFileCannotStart({ name: 'big.json', size: LARGEST_BACKUP_FILE_BYTES_READ + 1 }) ?? '', /still be over 200 MB, which is the most a restore takes/);
+});
+
+test('a backup file over the limit on disk but under it as sent is sent', () => {
+  const document = aBackupOfTheMill();
+  // Rows of short fields, as many tables hold: their spacing is a large part of the file.
+  document.tables.scenes = Array.from({ length: 200 }, () => ({ ...(document.tables.scenes[0] ?? {}) })) as typeof document.tables.scenes;
+  const fileText = runExportDocumentAsText(document);
+  const sent = restoreToSend(fileText, false);
+  assert.ok(sent.ok);
+  assert.ok(bodyBytesOf(sent.input) < new TextEncoder().encode(fileText).length * 0.9, 'the body sent is smaller than the file');
+});
+
+test('a backup file is sent whole with the replace box as ticked', () => {
+  const document = aBackupOfTheMill();
+  const plain = restoreToSend(JSON.stringify(document, null, 2), false);
+  assert.ok(plain.ok);
+  assert.deepEqual(plain.input, { document, replace: false });
+  assert.equal(plain.runSlug, 'the-mill');
+  const replacing = restoreToSend(JSON.stringify(document), true);
+  assert.ok(replacing.ok);
+  assert.equal(replacing.input.replace, true);
+});
+
+test('a file that is not a backup is refused in the contract\'s words, and nothing is sent', () => {
+  const notJson = restoreToSend('{ "formatName": "timeweft-run-ex', false);
+  assert.equal(notJson.ok, false);
+  assert.match(notJson.ok ? '' : notJson.reason, /not readable as JSON.*Nothing was sent\./);
+
+  const otherKind = restoreToSend(JSON.stringify({ formatName: 'something-else', formatVersion: 1 }), false);
+  assert.match(otherKind.ok ? '' : otherKind.reason, /not a Timeweft backup of a run.*Nothing was sent\./);
+
+  const laterVersion = restoreToSend(JSON.stringify({ ...aBackupOfTheMill(), formatVersion: 99 }), false);
+  assert.match(laterVersion.ok ? '' : laterVersion.reason, /format version 99, and this server reads version 1 only/);
+
+  const cutShort = aBackupOfTheMill() as unknown as { tables: Record<string, unknown> };
+  delete cutShort.tables['collisions'];
+  const missing = restoreToSend(JSON.stringify(cutShort), false);
+  assert.match(missing.ok ? '' : missing.reason, /missing the list for collisions/);
+});
+
+test('a backup that would travel larger than the server takes is not sent, saying both figures', () => {
+  const document = aBackupOfTheMill();
+  // Quotes escape to two characters each, so this file is under the limit and its body is not.
+  const firstRun = document.tables.runs[0];
+  assert.ok(firstRun !== undefined);
+  firstRun.setting = '"'.repeat(Math.ceil(LARGEST_RESTORE_BODY_BYTES / 2) + 10);
+  const toSend = restoreToSend(JSON.stringify(document), false);
+  assert.equal(toSend.ok, false);
+  assert.match(toSend.ok ? '' : toSend.reason, /server takes at most 200 MB\. Nothing was sent\./);
+});
+
+test('the restore button and the replace sentence say what each does', () => {
+  assert.equal(restoreButtonText(false, false), 'Restore');
+  assert.equal(restoreButtonText(false, true), 'Restore, replacing the run already here');
+  assert.equal(restoreButtonText(true, false), 'Restoring…');
+  assert.equal(restoreButtonText(true, true), 'Replacing…');
+  assert.match(REPLACE_ON_RESTORE_SENTENCE, /left as it was/);
+});
+
+test('a restore is told in counts and in the order the tables are written, naming any run it replaced', () => {
+  const counts = runRowCountsInWords({ ...countsOf(0), scenes: 4, collisions: 2 });
+  assert.equal(counts.length, RUN_EXPORT_TABLE_NAMES.length);
+  assert.equal(counts[0]?.label, 'The run itself');
+  assert.deepEqual(counts.find((each) => each.label === 'Scenes, struck takes included')?.count, 4);
+  assert.deepEqual(counts.at(-1), { label: 'Collisions', count: 2 });
+  assert.equal(new Set(counts.map((each) => each.label)).size, counts.length);
+
+  const fresh: RestoredRunReport = { run: runRecord('the-mill', 'The Mill'), rowsRestored: countsOf(1), replaced: null };
+  assert.equal(restoredInWords(fresh), 'Restored The Mill (the-mill).');
+  const replacing: RestoredRunReport = { ...fresh, replaced: { run: runRecord('the-mill', 'The Old Mill'), rowsRemoved: countsOf(2) } };
+  assert.match(restoredInWords(replacing), /in place of The Old Mill \(the-mill\), which was removed/);
+});
+
+test('a size is said whole where it is whole, and to one place where it is not', () => {
+  assert.equal(megabytesInWords(200 * 1024 * 1024), '200 MB');
+  assert.equal(megabytesInWords(1.25 * 1024 * 1024), '1.3 MB');
 });

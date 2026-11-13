@@ -106,7 +106,7 @@ test('a slug is well formed only in the contract\'s own pattern', () => {
 test('files over the server\'s limit together are refused before they are read, saying the size and the limit', () => {
   assert.equal(whyFilesAreTooLarge([LARGEST_IMPORT_BODY_BYTES]), null);
   const sentence = whyFilesAreTooLarge([LARGEST_IMPORT_BODY_BYTES, 1024 * 1024]);
-  assert.equal(sentence, 'The files come to 25.0 MB together, and an import takes at most 24.0 MB.');
+  assert.equal(sentence, 'The files come to 25 MB together, and an import takes at most 24 MB.');
 });
 
 const AN_IMPORT_FORM = { slug: 'the-mill', title: '', setting: '', status: 'binding' as const };
@@ -124,7 +124,7 @@ test('files under the limit whose escaping takes the body over it are not sent, 
   assert.equal(whyFilesAreTooLarge([quotes.length]), null);
   const toSend = importToSend(AN_IMPORT_FORM, { log: quotes });
   assert.equal(toSend.ok, false);
-  assert.match(toSend.ok ? '' : toSend.reason, /^The import comes to 28\.0 MB as it would be sent, and the server takes at most 24\.0 MB\. Nothing was sent\.$/);
+  assert.match(toSend.ok ? '' : toSend.reason, /^The import comes to 28\.0 MB as it would be sent, and the server takes at most 24 MB\. Nothing was sent\.$/);
 });
 
 test('an import whose body fits is sent as the input the form builds', () => {
@@ -144,7 +144,7 @@ test('the import can start with one part matched and a well-formed slug, and not
 
 test('the import cannot start while two files match one part, or while the files are too large', () => {
   assert.match(whyImportCannotStart(matchFilesToParts([file('log.md'), file('a-log.md'), file('state.md')]), 'the-mill') ?? '', /Pick only one/);
-  assert.match(whyImportCannotStart(matchFilesToParts([file('log.md', LARGEST_IMPORT_BODY_BYTES), file('state.md', 2)]), 'the-mill') ?? '', /at most 24\.0 MB/);
+  assert.match(whyImportCannotStart(matchFilesToParts([file('log.md', LARGEST_IMPORT_BODY_BYTES), file('state.md', 2)]), 'the-mill') ?? '', /at most 24 MB/);
 });
 
 test('the input sends every part, empty where no file was given, and leaves blank title and setting out', () => {

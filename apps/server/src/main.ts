@@ -8,6 +8,7 @@ import { openStore } from '@timeweft/store';
 import { accessSettingsFromEnvironment } from './access.ts';
 import { databaseAddressFromEnvironment } from './database-address.ts';
 import { createTimeweftServer } from './http-server.ts';
+import { scheduledBackupSettingsFromEnvironment, startScheduledBackups } from './scheduled-backups.ts';
 
 const DEFAULT_PORT = 4400;
 
@@ -26,15 +27,22 @@ async function main(): Promise<void> {
   const access = accessSettingsFromEnvironment(process.env);
   const port = portFromEnvironment(process.env['PORT']);
   const schema = process.env['TIMEWEFT_DATABASE_SCHEMA']?.trim();
+  const backupSettings = scheduledBackupSettingsFromEnvironment(process.env);
 
   const store = await openStore(databaseUrl, schema === undefined || schema === '' ? {} : { schema });
   await store.migrate();
   const server = createTimeweftServer({ ...access, store, webRoot: existsSync(WEB_ROOT) ? WEB_ROOT : null });
+  // The backups log slugs and counts only, never what a run holds.
+  const backups = backupSettings === null ? null : startScheduledBackups(store, backupSettings, {
+    info: (line) => console.log(line),
+    error: (line) => console.error(line),
+  });
 
   let stopping = false;
   const stop = (): void => {
     if (stopping) return;
     stopping = true;
+    backups?.stop();
     server.close(() => {
       store.close().then(() => process.exit(0), (error: unknown) => {
         console.error('Closing the store failed:', error);
@@ -50,6 +58,9 @@ async function main(): Promise<void> {
     const address = server.address();
     const listeningOn = typeof address === 'object' && address !== null ? address.port : port;
     console.log(`Timeweft is listening on port ${listeningOn}${access.accessToken === null ? ', with no access token (local use only)' : ''}.`);
+    if (backupSettings !== null) {
+      console.log(`Every run is backed up to ${backupSettings.folder} every ${backupSettings.everyHours} hours, keeping the newest ${backupSettings.backupsToKeep} of each.`);
+    }
   });
 }
 

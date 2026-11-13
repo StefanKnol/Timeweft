@@ -10,8 +10,9 @@
 import type {
   AnswerByOperation, Briefing, ImportedRunReport, CollisionRecord, EntryLookup, EntryWritten, FactRecord, FoundItem, Id,
   OperationName, RulingRecord, RunListing, RunRecord, RunSnapshot, SavedScene, SceneInFull, SceneRecord, SceneSummary,
-  ThreadRecord, WaypointRecord,
+  ThreadRecord, WaypointRecord, RestoredRunReport, RunExportDocument, RunExportRowCounts, RunExportTableName,
 } from '@timeweft/contract';
+import { RUN_EXPORT_TABLE_IN_WORDS, RUN_EXPORT_TABLE_NAMES } from '@timeweft/contract';
 import { onOneLine } from '@timeweft/briefing';
 
 export interface NamesInTheRun {
@@ -293,6 +294,30 @@ export function importedRunInWords(report: ImportedRunReport): string {
   return lines.join('\n');
 }
 
+/** How many rows of each table, one line per table, in the order a restore writes them. Counts only, never content. */
+export function rowCountsInWords(counts: RunExportRowCounts, indent = ''): string[] {
+  return RUN_EXPORT_TABLE_NAMES.map((table) => `${indent}${RUN_EXPORT_TABLE_IN_WORDS[table]}: ${counts[table]}`);
+}
+
+/** The rows a backup document holds, counted per table. */
+export function rowCountsOf(document: RunExportDocument): RunExportRowCounts {
+  return Object.fromEntries(RUN_EXPORT_TABLE_NAMES.map((table) => [table, document.tables[table].length])) as RunExportRowCounts;
+}
+
+/** An export said as counts. The document itself is the answer; words never carry its content. */
+export function exportedRunInWords(document: RunExportDocument): string {
+  return [`A backup of the run ${document.runSlug}, taken at ${document.exportedAt}, format version ${document.formatVersion}. It holds:`, ...rowCountsInWords(rowCountsOf(document), '- ')].join('\n');
+}
+
+/** A restore said as counts, and what a replaced run held. */
+export function restoredRunInWords(report: RestoredRunReport): string {
+  const lines = [`Restored the run ${report.run.slug}. It holds:`, ...rowCountsInWords(report.rowsRestored, '- ')];
+  if (report.replaced !== null) {
+    lines.push(`It replaced the run ${report.replaced.run.slug}, which was removed. That run held:`, ...rowCountsInWords(report.replaced.rowsRemoved, '- '));
+  }
+  return lines.join('\n');
+}
+
 /** One rendering per operation, so an operation added to the contract needs a rendering here too. */
 export const ANSWER_IN_WORDS: { [Name in OperationName]: (answer: AnswerByOperation[Name], names: NamesInTheRun) => string } = {
   list_runs: (answer) => runListingsInWords(answer),
@@ -326,4 +351,6 @@ export const ANSWER_IN_WORDS: { [Name in OperationName]: (answer: AnswerByOperat
   settle_collision: (answer, names) => collisionInWords(answer, names),
   read_run: (answer) => runSnapshotInWords(answer),
   import_run: (answer) => importedRunInWords(answer),
+  export_run: (answer) => exportedRunInWords(answer),
+  restore_run: (answer) => restoredRunInWords(answer),
 };

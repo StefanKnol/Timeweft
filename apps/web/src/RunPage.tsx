@@ -9,6 +9,7 @@ import { CollisionsSection } from './CollisionsSection.tsx';
 import { BriefingSection } from './BriefingSection.tsx';
 import { JourneysSection } from './JourneysSection.tsx';
 import { RunDetailsEditor } from './RunDetailsEditor.tsx';
+import { BackupDownload } from './BackupDownload.tsx';
 
 const SECTION_TITLES: Record<RunSection, string> = {
   scenes: 'Scenes',
@@ -55,6 +56,7 @@ function RunHeading({ snapshot, readAgain }: { snapshot: RunSnapshot; readAgain:
       )}
       {run.register !== '' && <p className="quiet">Narrated: {run.register}</p>}
       <RunDetailsEditor snapshot={snapshot} readAgain={readAgain} />
+      <BackupDownload runSlug={run.slug} />
     </header>
   );
 }

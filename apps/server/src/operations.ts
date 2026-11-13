@@ -7,7 +7,7 @@
  * without a handler here fails the typecheck rather than failing a caller.
  */
 import {
-  OPERATIONS, Refusal,
+  OPERATIONS, Refusal, readRunExportDocument,
   type AnswerByOperation, type Audience, type Id, type InputOf, type OperationName, type RunSnapshot, type Store,
 } from '@timeweft/contract';
 import {
@@ -106,6 +106,11 @@ export const OPERATION_HANDLERS: { [Name in OperationName]: Handler<Name> } = {
     if (input.replaceEarlierImport) options.replaceEarlierImport = true;
     return importWeaverFiles(store, input.files, options);
   },
+  // A backup is the author's alone and is never offered over MCP: the contract gives both
+  // operations the author's audience, so a story caller is refused before either runs.
+  export_run: (store, input) => store.exportRun(input.run),
+  // The document's outer shape is read here; every row in it is the store's to check.
+  restore_run: (store, input) => store.restoreRun(readRunExportDocument(input.document), { replace: input.replace }),
 };
 
 export function isOperationName(text: string): text is OperationName {

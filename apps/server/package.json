@@ -4,7 +4,10 @@
   "type": "module",
   "scripts": {
     "start": "node --experimental-strip-types src/main.ts",
-    "import-run": "node --experimental-strip-types src/import-run-command.ts"
+    "import-run": "node --experimental-strip-types src/import-run-command.ts",
+    "export-run": "node --experimental-strip-types --no-warnings src/backup-commands.ts export-run",
+    "export-all": "node --experimental-strip-types --no-warnings src/backup-commands.ts export-all",
+    "restore-run": "node --experimental-strip-types --no-warnings src/backup-commands.ts restore-run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

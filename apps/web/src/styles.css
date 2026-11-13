@@ -284,3 +284,4 @@ fieldset { min-width: 0; }
 .confirming { border-left: 3px solid var(--attention); padding-left: 0.75rem; margin: 0.5rem 0; }
 .confirming p { margin: 0.25rem 0; }
 .property-list dd .quiet-button { margin-left: 0.25rem; }
+.backup-download { margin-top: 0.75rem; }

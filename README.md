@@ -43,7 +43,10 @@ Node 22.18 or later, pnpm, and PostgreSQL.
    ```
 
 5. Connect a chat over MCP (Streamable HTTP) at `http://<host>:<PORT>/mcp`, with the header
-   `Authorization: Bearer <TIMEWEFT_ACCESS_TOKEN>`. The chat is offered the story operations only.
+   `Authorization: Bearer <TIMEWEFT_STORY_TOKEN>`, or the access token where no story token is
+   set. The chat is offered the story operations only. Set `TIMEWEFT_STORY_TOKEN`: the access
+   token opens the author's web routes too, exporting and restoring whole runs among them, so a
+   chat's connector should not hold it.
 
    From the connector's menu the chat can also attach a run's briefing, or one of a run's main
    characters (the main character and the ten people with the longest trails), and start from
@@ -54,7 +57,8 @@ Node 22.18 or later, pnpm, and PostgreSQL.
 ## Running it in a container
 
 The image holds the app and nothing else. Everything the author writes lives in the PostgreSQL
-database the container is pointed at, so that database is the one thing to back up.
+database the container is pointed at, so that database is the one thing to back up. The server
+can also write a backup file of every run on its own; see *Backups of runs*.
 
 1. Build the image, or let the Docker workflow push it to your registry on every merge to `main`.
 
@@ -80,7 +84,11 @@ database the container is pointed at, so that database is the one thing to back 
    | `TIMEWEFT_DATABASE_PORT` | no | 5432 unless set. |
    | `TIMEWEFT_DATABASE_NAME` | no | `timeweft` unless set. |
    | `TIMEWEFT_ACCESS_TOKEN` | yes | Long and random. Every request to `/api` and `/mcp` carries it. |
+   | `TIMEWEFT_STORY_TOKEN` | no | Long, random and different from the access token. Opens `/mcp` and nothing else, so a story chat's connector never holds the author's token. Unset, a chat connects with the access token. |
    | `PORT` | no | The port inside the container. 4400 unless set. |
+   | `TIMEWEFT_BACKUP_FOLDER` | no | A folder to write a backup of every run into, automatically. Unset, nothing is backed up by itself. See *Backups of runs* below. |
+   | `TIMEWEFT_BACKUP_EVERY_HOURS` | no | How often, in hours, from more than 0 up to 576 (24 days). 24 unless set. |
+   | `TIMEWEFT_BACKUPS_TO_KEEP` | no | How many backups of each run the folder keeps; older ones are deleted. 14 unless set. |
 
    A whole address in `TIMEWEFT_DATABASE_URL` is still taken in place of the five database
    settings, but never beside them.
@@ -104,6 +112,50 @@ database the container is pointed at, so that database is the one thing to back 
    ```
 
 `http://<host>:4400/health` needs no token and says which build is running.
+
+## Backups of runs
+
+A backup of a run is one file holding everything the run holds: every scene with its struck
+takes, every fact with its history, author-only material, rulings, threads, waypoints, journeys,
+clocks, collisions and every change the author made, each exactly as the store keeps it. A run
+restored from it is the same run, with the same ids, order and times. The file is the author's
+canon, so keep it where the database is kept, never anywhere public.
+
+**On the pages.** A run's page has *Download a backup of this run*. The Runs page has *Restore a
+run from a backup file*, which puts a run back. A run with the backup's name or id already there
+is refused, unless *Replace the run already here* is ticked: then that run, and everything it
+holds, is removed and the backup is put in its place, in one step, so a refused or failed restore
+leaves it as it was. A backup is sent without the spacing its file is written with, and what is
+sent may be up to 200 MB, which is a file of about 250 MB or more; the page measures it before
+sending, and the server refuses anything larger before reading it.
+
+**By command.** A path is read from where the command is run. They print counts only.
+
+```sh
+pnpm export-run <slug> <file>         # one run, to the file named
+pnpm export-all <folder>              # every run, each named by its slug and the time
+pnpm restore-run <file> [--replace]   # put a run back from a backup file
+```
+
+In the container the same three are commands of the image, with the folder mounted:
+
+```sh
+docker run --rm -v /path/to/backups:/backups \
+  -e TIMEWEFT_DATABASE_HOST=<host> -e TIMEWEFT_DATABASE_USER=<user> \
+  -e TIMEWEFT_DATABASE_PASSWORD=<password> \
+  <image> restore-run /backups/<file> --replace
+```
+
+**Automatically.** Where `TIMEWEFT_BACKUP_FOLDER` is set, the server writes a backup of every run
+into that folder a minute after it starts and then every `TIMEWEFT_BACKUP_EVERY_HOURS` hours (24
+unless set). Each file is named by the run's slug and the time it was taken, such as
+`the-mill--20261113T093000Z.timeweft-run.json`, and is written under a temporary name first, so a
+file with a backup's name is always whole. A run that has not changed since its newest backup is
+not written again. The newest `TIMEWEFT_BACKUPS_TO_KEEP` files of each run are kept (14 unless set)
+and older ones deleted. A backup that fails is written to the server's log, by run and kind of
+failure only, and the server carries on. In a container, mount a folder there that the container's
+user can write to; `compose.example.yml` shows one. Copy that folder somewhere else as well: a
+backup on the same disk as the database is lost with it.
 
 ### Behind a hub or a proxy
 
