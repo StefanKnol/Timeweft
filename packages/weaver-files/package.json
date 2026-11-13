@@ -1,0 +1,7 @@
+{
+  "name": "@timeweft/weaver-files",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@timeweft/contract": "workspace:*" }
+}

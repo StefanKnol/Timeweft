@@ -1,0 +1,50 @@
+name: check
+on:
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: timeweft
+          POSTGRES_PASSWORD: timeweft
+          POSTGRES_DB: timeweft_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U timeweft" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TIMEWEFT_TEST_DATABASE_URL: postgres://timeweft:timeweft@127.0.0.1:5432/timeweft_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm check-no-canon
+
+  # The image is built and started for real on every pull request, so a Dockerfile that no
+  # longer builds, or a container that no longer serves, fails here and not on the author's server.
+  image:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: timeweft
+          POSTGRES_PASSWORD: timeweft
+          POSTGRES_DB: timeweft_image
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U timeweft" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t timeweft:check --build-arg TIMEWEFT_BUILD_NUMBER=1 --build-arg TIMEWEFT_BUILD_COMMIT=$(git rev-parse --short=7 HEAD) --build-arg TIMEWEFT_BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ) .
+      - name: Start it and ask it things
+        run: sh scripts/check-the-image.sh timeweft:check postgres://timeweft:timeweft@127.0.0.1:5432/timeweft_image

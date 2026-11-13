@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+.git
+.github
+dist
+**/dist
+# The author's own files never enter an image.
+private
+.env
+.env.*
+*.log

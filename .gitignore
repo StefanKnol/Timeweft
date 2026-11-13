@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+# Anything private a session works on locally. Canon never enters this repository.
+/private/
