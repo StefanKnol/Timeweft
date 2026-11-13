@@ -56,6 +56,8 @@ export interface SavedScene {
   rulingsRecorded: RulingRecord[];
   threadsOpened: ThreadRecord[];
   threadsClosed: ThreadRecord[];
+  /** Open threads the scene moved on without opening or closing, as they stand after the save. */
+  threadsTouched: ThreadRecord[];
   /** What was held back for the author. */
   collisions: CollisionRecord[];
   /** Anything the caller should know, in sentences: a name that already exists, a fact skipped. */
@@ -107,9 +109,77 @@ export interface Store {
   stateFact(input: InputOf<'state_fact'>): Promise<FactRecord>;
   settleCollision(input: InputOf<'settle_collision'>): Promise<CollisionRecord>;
 
-  /** Write a whole run read from files, in one transaction. Refuses a slug already there. */
+  /** Write a whole run read from files, in one transaction. Refuses a slug already there with `RunAlreadyExists`. */
   importRun(run: ImportedRun): Promise<RunSnapshot>;
+  /**
+   * Write a whole run read from files over the run an earlier import of the same slug made, in one
+   * transaction: the earlier run is removed and the files are imported in its place, so a failed
+   * import leaves the earlier run whole. Refused with `EarlierImportStandsInTheWay` where that run
+   * holds anything written after its import, or where another run continues from it. Where no run
+   * has the slug, the files are imported as `importRun` would and nothing is removed.
+   */
+  replaceImportedRun(run: ImportedRun): Promise<ReplacedImport>;
 }
+
+/** How much a run holds, kind by kind. */
+export interface RunCounts {
+  scenes: number;
+  entries: number;
+  facts: number;
+  trailNotes: number;
+  rulings: number;
+  threads: number;
+  waypoints: number;
+  journeyLegs: number;
+  clocks: number;
+}
+
+export interface ReplacedImport {
+  snapshot: RunSnapshot;
+  /** What the earlier import held and was removed, or null where no run had the slug. */
+  removed: RunCounts | null;
+}
+
+/**
+ * The refusal for an import whose slug a run already has. Its sentence quotes nothing but the slug
+ * the author gave, so it may be said anywhere. It offers replacing the earlier run only where an
+ * import the store can date made it, since no other run is ever replaced, and the page knows that
+ * sentence by `isRunAlreadyExistsSentence` to offer the replacement.
+ */
+export class RunAlreadyExists extends Refusal {
+  /** Whether an import the store can date made the run, so that replacing it may be offered. */
+  readonly madeByAnImport: boolean;
+
+  constructor(slug: string, madeByAnImport: boolean) {
+    super(madeByAnImport ? runAlreadyExistsSentence(slug) : runAlreadyExistsUnreplaceablySentence(slug));
+    this.madeByAnImport = madeByAnImport;
+  }
+}
+
+const RUN_ALREADY_EXISTS_ENDING = '" already exists, so it was not imported again. Its earlier import can be replaced by these files, which removes that run and writes the files in its place.';
+
+const RUN_ALREADY_EXISTS_UNREPLACEABLY_ENDING = '" already exists, so it was not imported again. No import the store can date made it (it was begun in a chat, or imported before the store kept which writes were an import\'s), so it is never replaced. Import the files under another slug.';
+
+export function runAlreadyExistsSentence(slug: string): string {
+  return `A run called "${slug}${RUN_ALREADY_EXISTS_ENDING}`;
+}
+
+/** The sentence for a slug taken by a run no import the store can date made, which offers no replacement. */
+export function runAlreadyExistsUnreplaceablySentence(slug: string): string {
+  return `A run called "${slug}${RUN_ALREADY_EXISTS_UNREPLACEABLY_ENDING}`;
+}
+
+/** True for the sentence `RunAlreadyExists` carries where replacing is offered, as it arrives over the web. */
+export function isRunAlreadyExistsSentence(sentence: string): boolean {
+  return sentence.startsWith('A run called "') && sentence.endsWith(RUN_ALREADY_EXISTS_ENDING);
+}
+
+/**
+ * The refusal to replace an earlier import because the run holds more than its import: something
+ * written after it, or a run that continues from it. It names kinds, counts and slugs and quotes
+ * nothing a file said, so it may be said anywhere.
+ */
+export class EarlierImportStandsInTheWay extends Refusal {}
 
 /**
  * A run as read out of the five files a story kept by hand. Everything refers to other things by
@@ -125,7 +195,11 @@ export interface ImportedRun {
   scenes: ImportedScene[];
   entries: ImportedEntry[];
   rulings: ImportedRuling[];
-  threads: Array<{ text: string; about: string[]; openedInScene: number | null; closed: boolean; resolution: string }>;
+  /**
+   * `touchedInScenes` holds every scene the thread's text names after its opening, a range read
+   * for its last scene, oldest first: the importer writes each as a touch. Left out, it has none.
+   */
+  threads: Array<{ text: string; about: string[]; openedInScene: number | null; closed: boolean; resolution: string; touchedInScenes?: number[] }>;
   waypoints: Array<{ text: string; reached: boolean }>;
   legs: Array<{ from: string; to: string; duration: string; note: string; scene: number | null }>;
   /** What the reader could not place, in sentences, so nothing is dropped in silence. */

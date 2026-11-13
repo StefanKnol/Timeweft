@@ -16,7 +16,7 @@
  * each item of a list: a client may offer null beside every optional parameter, and no parameter
  * here gives null a meaning. Over the web a null is refused, as any wrong value is.
  */
-import type { Briefing, EntryLookup, FoundItem, RunListing, SavedScene } from './answers.ts';
+import type { Briefing, EntryLookup, FoundItem, RunCounts, RunListing, SavedScene } from './answers.ts';
 import type {
   CollisionRecord, EntryNoteRecord, EntryRecord, FactRecord, JourneyLegRecord, RulingRecord, RunRecord, RunSnapshot,
   SceneRecord, ThreadRecord,
@@ -32,6 +32,8 @@ export interface SceneInFull {
   rulings: RulingRecord[];
   threadsOpened: ThreadRecord[];
   threadsClosed: ThreadRecord[];
+  /** The open threads this scene moved on without opening or closing them. */
+  threadsTouched: ThreadRecord[];
   /** The journeys first travelled in this scene. */
   legs: JourneyLegRecord[];
 }
@@ -42,17 +44,9 @@ export type SceneSummary = Omit<SceneRecord, 'record'>;
 /** What an import read and wrote, in counts, and what it could not place, in sentences. */
 export interface ImportedRunReport {
   run: RunRecord;
-  counts: {
-    scenes: number;
-    entries: number;
-    facts: number;
-    trailNotes: number;
-    rulings: number;
-    threads: number;
-    waypoints: number;
-    journeyLegs: number;
-    clocks: number;
-  };
+  counts: RunCounts;
+  /** What the earlier import of this slug held and was removed. Null, or left out, where none was replaced. */
+  removedEarlierImport?: RunCounts | null;
   /** Every line the reader could not place, naming the file and the line. Nothing is dropped in silence. */
   unplaced: string[];
 }

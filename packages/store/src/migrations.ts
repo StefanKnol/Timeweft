@@ -42,6 +42,18 @@ export function propertyAsTheDoorsKeepIt(column: string): string {
   return `lower(regexp_replace(${trimmed}, '${whitespace}+', ' ', 'g'))`;
 }
 
+/** The sequence every row a run holds takes its write mark from. */
+export const WRITE_MARKS = 'timeweft_write_marks';
+
+/** The tables whose rows a run holds and an import writes, each carrying a write mark. */
+export const TABLES_A_RUN_WRITES = ['clocks', 'scenes', 'entries', 'facts', 'entry_notes', 'rulings', 'threads', 'waypoints', 'journey_legs'] as const;
+
+/** The marks migration 4 gives the rows stored before marks were kept. The sequence starts above them. */
+export const IMPORTS_OWN_MARK = 1;
+export const WRITTEN_LATER_MARK = 2;
+/** A row a migration rewrote after the import, which cannot be told from a later write. */
+export const CANNOT_BE_TOLD_MARK = 3;
+
 export const MIGRATIONS: Migration[] = [
   {
     number: 1,
@@ -260,6 +272,80 @@ export const MIGRATIONS: Migration[] = [
             where later.entry_id = facts.entry_id and later.property = facts.property
               and later.visibility = 'open' and later.written_order > facts.written_order
           )`,
+    ],
+  },
+  {
+    number: 4,
+    name: 'which writes in a run were its import',
+    statements: [
+      // Every row a run holds carries a mark from one sequence, taken when the row is written, and an
+      // import marks its run with a mark taken after its last row. A row with a later mark was written
+      // after the import, by a story or the author, which is what keeps replacing an earlier import
+      // from removing more than the import wrote. A sequence only rises, so this does not depend on
+      // the database's clock, which can be stepped back. Marks below 10 are the ones given here to
+      // the rows already stored.
+      `create sequence ${WRITE_MARKS} start with 10`,
+      `alter table runs add column imported_through bigint`,
+      ...TABLES_A_RUN_WRITES.map((table) => `alter table ${table} add column write_mark bigint`),
+      // Runs imported before the marks: every row an import wrote was written in the transaction that
+      // wrote the run, so it shares the run's xmin until something rewrites it (nothing updates a
+      // run). The newest such row is when the import finished. Two things make that unreadable, and
+      // such a run is left undated, so replacing it is refused rather than guessed at: a run whose
+      // xmin a recorded migration or another run shares was copied in one transaction (a restore),
+      // where every row shares one xmin whoever wrote it; and a run with nothing written as an import
+      // was begun in a chat.
+      `create temporary table runs_dated_by_their_import on commit drop as
+        select runs.id as run_id, (
+          select max(written_with_the_run.created_at) from (
+            ${TABLES_A_RUN_WRITES.map((table) => `select created_at from ${table} where run_id = runs.id and xmin = runs.xmin`).join(' union all ')}
+          ) written_with_the_run
+        ) as imported_at
+        from runs
+        where (exists (select 1 from entries where entries.run_id = runs.id and entries.source = 'import')
+            or exists (select 1 from facts where facts.run_id = runs.id and facts.source = 'import')
+            or exists (select 1 from rulings where rulings.run_id = runs.id and rulings.source = 'import'))
+          and not exists (select 1 from timeweft_migrations where timeweft_migrations.xmin = runs.xmin)
+          and not exists (select 1 from runs other where other.id <> runs.id and other.xmin = runs.xmin)`,
+      `delete from runs_dated_by_their_import where imported_at is null`,
+      // A row of a dated run is the import's (${IMPORTS_OWN_MARK}) where it shares the run's xmin. One a
+      // later transaction wrote is a story's or the author's (${WRITTEN_LATER_MARK}). One a migration
+      // rewrote (its xmin is that migration's record) is the import's where it was written no later
+      // than the import's newest row, and otherwise cannot be told apart (${CANNOT_BE_TOLD_MARK}): it
+      // may be the import's own, or a later write.
+      ...TABLES_A_RUN_WRITES.map((table) => `update ${table} set write_mark = case
+          when dated.run_id is null then ${WRITTEN_LATER_MARK}
+          when ${table}.xmin = runs.xmin then ${IMPORTS_OWN_MARK}
+          when exists (select 1 from timeweft_migrations where timeweft_migrations.xmin = ${table}.xmin)
+            then case when ${table}.created_at <= dated.imported_at then ${IMPORTS_OWN_MARK} else ${CANNOT_BE_TOLD_MARK} end
+          else ${WRITTEN_LATER_MARK}
+        end
+        from runs left join runs_dated_by_their_import dated on dated.run_id = runs.id
+        where runs.id = ${table}.run_id`),
+      `update runs set imported_through = ${IMPORTS_OWN_MARK} where id in (select run_id from runs_dated_by_their_import)`,
+      ...TABLES_A_RUN_WRITES.map((table) => `alter table ${table}
+        alter column write_mark set default nextval('${WRITE_MARKS}'), alter column write_mark set not null`),
+    ],
+  },
+  {
+    number: 5,
+    name: 'a scene may touch a thread',
+    statements: [
+      // A row per scene that moved a thread on, not a column on the thread: a touch by a take that is
+      // later struck must stop counting while the row is kept, and the scene's status says which.
+      // Both keys cascade, so removing a run's threads or scenes in either order removes its touches.
+      // written_by_scene_id is the scene whose save wrote the touch, and null for one an import wrote:
+      // a redo moves an import's touch onto the new take, as it moves an import's closing, and leaves
+      // the struck take's own where they are.
+      `create table thread_touches (
+        thread_id uuid not null references threads(id) on delete cascade,
+        scene_id uuid not null references scenes(id) on delete cascade,
+        note text not null default '',
+        written_by_scene_id uuid references scenes(id) on delete cascade,
+        ${WHEN_WRITTEN},
+        ${ORDER_WRITTEN},
+        primary key (thread_id, scene_id)
+      )`,
+      `create index thread_touches_by_scene on thread_touches (scene_id)`,
     ],
   },
 ];

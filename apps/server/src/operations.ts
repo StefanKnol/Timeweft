@@ -87,6 +87,7 @@ export const OPERATION_HANDLERS: { [Name in OperationName]: Handler<Name> } = {
     if (input.title !== undefined) options.title = input.title;
     if (input.setting !== undefined) options.setting = input.setting;
     if (input.status !== undefined) options.status = input.status;
+    if (input.replaceEarlierImport) options.replaceEarlierImport = true;
     return importWeaverFiles(store, input.files, options);
   },
 };

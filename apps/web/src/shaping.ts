@@ -5,7 +5,7 @@
  * browser, is what lets `node --test` hold it: a rule about which fact holds or which take is
  * struck is tested once, not looked at in a screenshot.
  */
-import { ENTRY_KINDS, OPERATION_ROUTE_PREFIX, OPERATIONS } from '@timeweft/contract';
+import { ENTRY_KINDS, OPERATION_ROUTE_PREFIX, OPERATIONS, isRunAlreadyExistsSentence } from '@timeweft/contract';
 import type {
   ClockReading, ClockRecord, CollisionRecord, EntryKind, EntryNoteRecord, EntryRecord, FactRecord,
   Id, ImportedRunReport, JourneyLegRecord, RequestOf, RulingRecord, RunSnapshot, RunStatus, SceneRecord, ThreadRecord, Visibility, WaypointRecord, WireAnswer,
@@ -110,6 +110,11 @@ export interface SceneEstablished {
   rulings: RulingRecord[];
   threadsOpened: ThreadRecord[];
   threadsClosed: ThreadRecord[];
+  /**
+   * The threads this scene moved on without closing, with what moved where it said: the same
+   * threads read_scene lists as touched. A struck take is not in a thread's touches, so it has none.
+   */
+  threadsTouched: Array<{ thread: ThreadRecord; note: string }>;
   /** The journeys first travelled in this scene. */
   legs: JourneyLegRecord[];
 }
@@ -122,6 +127,10 @@ export function whatASceneEstablished(sceneId: Id, snapshot: RunSnapshot): Scene
     rulings: snapshot.rulings.filter((ruling) => ruling.sceneId === sceneId),
     threadsOpened: snapshot.threads.filter((thread) => thread.openedInSceneId === sceneId),
     threadsClosed: snapshot.threads.filter((thread) => thread.closedInSceneId === sceneId),
+    threadsTouched: snapshot.threads.flatMap((thread) => {
+      const touch = thread.touches.find((each) => each.sceneId === sceneId);
+      return touch === undefined || thread.closedInSceneId === sceneId ? [] : [{ thread, note: touch.note }];
+    }),
     legs: snapshot.legs.filter((leg) => leg.sceneId === sceneId),
   };
 }
@@ -247,26 +256,46 @@ export function rulingsMatching(rulings: RulingRecord[], filterText: string): Ru
     .sort((first, second) => first.number - second.number);
 }
 
-/** A thread with the scene numbers it opened and closed at. */
+/** A thread with the scene numbers it opened at, was last touched at and closed at. */
 export interface ThreadAsDrawn {
   thread: ThreadRecord;
   openedInSceneNumber: number | null;
+  /** The scene that last opened, touched or closed it, as the store derived it. */
+  lastTouchedInSceneNumber: number | null;
+  /** What moved in that scene, where its touch said. */
+  lastTouchNote: string;
   closedInSceneNumber: number | null;
 }
 
-/** Open threads first, each half in the order the threads opened. */
+/**
+ * Open threads first. Each half in the order a briefing ranks threads: the one a scene moved last
+ * first, by the scene it was last touched in, then the scene it opened in, the newest first, then
+ * the latest written. An unknown scene ranks after every known one at its step.
+ */
 export function threadsOpenFirst(threads: ThreadRecord[], scenes: SceneRecord[]): { open: ThreadAsDrawn[]; closed: ThreadAsDrawn[] } {
   const sceneNumbers = sceneNumbersById(scenes);
+  const numberOf = (sceneId: string | null): number | null => (sceneId === null ? null : sceneNumbers.get(sceneId) ?? null);
+  const newestFirst = (first: number | null, second: number | null): number => {
+    if (first === null && second !== null) return 1;
+    if (first !== null && second === null) return -1;
+    return (second ?? 0) - (first ?? 0);
+  };
   const drawn = threads
-    .map((thread) => ({
-      thread,
-      openedInSceneNumber: thread.openedInSceneId === null ? null : sceneNumbers.get(thread.openedInSceneId) ?? null,
-      closedInSceneNumber: thread.closedInSceneId === null ? null : sceneNumbers.get(thread.closedInSceneId) ?? null,
+    .map((thread, writtenPosition) => ({
+      writtenPosition,
+      item: {
+        thread,
+        openedInSceneNumber: numberOf(thread.openedInSceneId),
+        lastTouchedInSceneNumber: numberOf(thread.lastTouchedInSceneId),
+        lastTouchNote: thread.touches.find((touch) => touch.sceneId === thread.lastTouchedInSceneId)?.note ?? '',
+        closedInSceneNumber: numberOf(thread.closedInSceneId),
+      },
     }))
-    .sort((first, second) => {
-      const byOpening = (first.openedInSceneNumber ?? 0) - (second.openedInSceneNumber ?? 0);
-      return byOpening !== 0 ? byOpening : first.thread.createdAt.localeCompare(second.thread.createdAt);
-    });
+    .sort((first, second) =>
+      newestFirst(first.item.lastTouchedInSceneNumber, second.item.lastTouchedInSceneNumber)
+      || newestFirst(first.item.openedInSceneNumber, second.item.openedInSceneNumber)
+      || second.writtenPosition - first.writtenPosition)
+    .map((each) => each.item);
   // A thread is closed by the scene that closed it; a resolution alone does not close it.
   return {
     open: drawn.filter((item) => item.thread.closedInSceneId === null),
@@ -655,6 +684,8 @@ export interface ImportForm {
   title: string;
   setting: string;
   status: RunStatus;
+  /** True where the author ticked replacing the earlier import. Left out, nothing is replaced. */
+  replaceEarlierImport?: boolean;
 }
 
 /**
@@ -671,7 +702,36 @@ export function importRunInput(form: ImportForm, textByPart: Partial<Record<Impo
     ...(setting === '' ? {} : { setting }),
     status: form.status,
     files: Object.fromEntries(IMPORT_PARTS.map((part) => [part, textByPart[part] ?? ''])) as Record<ImportPart, string>,
+    ...(form.replaceEarlierImport === true ? { replaceEarlierImport: true } : {}),
   };
+}
+
+/**
+ * The slug the server last refused because a run already has it, or null. Replacing the earlier
+ * import is offered only after that refusal, so nobody removes a run they did not know was there.
+ */
+export function slugRefusedAsExisting(refusal: string, slugSent: string): string | null {
+  return isRunAlreadyExistsSentence(refusal) ? slugSent : null;
+}
+
+/**
+ * Whether the box to replace the earlier import is drawn: only while the slug in the form is the
+ * one the server said already exists. Changing the slug takes the offer away, since the run the
+ * offer was about is no longer the one the import would land on.
+ */
+export function replaceEarlierImportOffered(slugTheServerSaidExists: string | null, slug: string): boolean {
+  return slugTheServerSaidExists !== null && slugTheServerSaidExists === slug;
+}
+
+/** The label of the box, naming the run and saying the picked files are what take its place. */
+export function replaceEarlierImportLabel(slug: string): string {
+  return `Replace the earlier import of "${slug}" with the files picked above. The run it made is removed with everything it holds, and these files are imported in its place. The store refuses this if a story or you wrote anything in that run after it was imported.`;
+}
+
+/** The import button's text: plain, or saying it replaces the earlier import. */
+export function importButtonText(running: boolean, replacing: boolean): string {
+  if (running) return replacing ? 'Replacing…' : 'Importing…';
+  return replacing ? 'Import, replacing the earlier one' : 'Import';
 }
 
 /** The size of a request body as it travels: its JSON, escaping counted, in UTF-8 bytes. */
@@ -715,6 +775,12 @@ export function importCountsInWords(counts: ImportedRunReport['counts']): Array<
     label: IMPORT_COUNT_LABELS[key],
     count: counts[key],
   }));
+}
+
+/** What a replacing import removed, in the same words and order as what it imported, or null where it replaced nothing. */
+export function removedEarlierImportInWords(report: ImportedRunReport): Array<{ label: string; count: number }> | null {
+  const removed = report.removedEarlierImport ?? null;
+  return removed === null ? null : importCountsInWords(removed);
 }
 
 /** The sentence for the lines the reader could not place, singular where there is one. */

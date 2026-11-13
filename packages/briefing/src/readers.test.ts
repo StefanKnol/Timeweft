@@ -137,8 +137,8 @@ describe('rulingsBearingOn', () => {
 });
 
 describe('threadsOpenFor', () => {
-  it('answers open threads only, never one opened in a struck scene', () => {
-    assert.deepEqual(threadsOpenFor(millerRun(), { aboutEntryIds: [], includeClosed: false }).map((thread) => thread.id), ['thread-rope', 'thread-flour']);
+  it('answers open threads only, never one opened in a struck scene, the one moved last first', () => {
+    assert.deepEqual(threadsOpenFor(millerRun(), { aboutEntryIds: [], includeClosed: false }).map((thread) => thread.id), ['thread-flour', 'thread-rope']);
   });
 
   it('answers closed ones too when asked', () => {
@@ -149,6 +149,22 @@ describe('threadsOpenFor', () => {
 
   it('answers only threads touching the named entries', () => {
     assert.deepEqual(threadsOpenFor(millerRun(), { aboutEntryIds: ['entry-miller'], includeClosed: false }).map((thread) => thread.id), ['thread-flour']);
+  });
+});
+
+describe('what one save wrote at one moment', () => {
+  it('is read back in the order it was written, never in the order of the ids', () => {
+    const run = millerRun();
+    const note = run.notes[0];
+    assert.ok(note);
+    run.notes.push(
+      { ...note, id: 'zz-written-first', text: 'She barred the sluice first.' },
+      { ...note, id: 'aa-written-second', text: 'Then she lit the lamp.' },
+    );
+    const entry = run.entries.find((each) => each.id === note.entryId);
+    assert.ok(entry);
+    const trail = lookUpEntry(run, entry.name, { withHistory: false, trail: 50 }).trail.map((each) => each.note.text);
+    assert.ok(trail.indexOf('Then she lit the lamp.') < trail.indexOf('She barred the sluice first.'), 'the trail is newest first, so the later written note leads');
   });
 });
 

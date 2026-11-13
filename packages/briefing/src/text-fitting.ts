@@ -64,3 +64,37 @@ export function cutToFit(text: string, maximumBytes: number): string | null {
   if (byteLengthOf(kept) < SMALLEST_USEFUL_CUT_BYTES) return null;
   return kept + CUT_MARKER;
 }
+
+/** What stands between the opening and the ending of a text shown by its two ends. */
+export const MIDDLE_LEFT_OUT_MARKER = ' … [middle left out] … ';
+
+/**
+ * A long text by its two ends: how it opens and how it now ends, with the middle left out and
+ * said so. A text that grew by being added to says what it is about at its start and where it
+ * stands at its end, so cutting only the tail would keep the oldest part and lose the newest.
+ * The ending gets the larger share. Both ends break at a space. A text that fits is returned whole.
+ */
+export function openingAndEndingOf(text: string, maximumBytes: number): string {
+  if (byteLengthOf(text) <= maximumBytes) return text;
+  const room = maximumBytes - byteLengthOf(MIDDLE_LEFT_OUT_MARKER);
+  if (room < 2) return cutToFit(text, maximumBytes) ?? '';
+  const openingRoom = Math.floor(room * 0.4);
+  const endingRoom = room - openingRoom;
+  const characters = [...text];
+  let opening = '';
+  for (const character of characters) {
+    if (byteLengthOf(opening + character) > openingRoom) break;
+    opening += character;
+  }
+  const lastSpaceOfOpening = opening.lastIndexOf(' ');
+  if (lastSpaceOfOpening > 0) opening = opening.slice(0, lastSpaceOfOpening);
+  let ending = '';
+  for (let position = characters.length - 1; position >= 0; position -= 1) {
+    const character = characters[position] ?? '';
+    if (byteLengthOf(character + ending) > endingRoom) break;
+    ending = character + ending;
+  }
+  const firstSpaceOfEnding = ending.indexOf(' ');
+  if (firstSpaceOfEnding >= 0 && firstSpaceOfEnding < ending.length - 1) ending = ending.slice(firstSpaceOfEnding + 1);
+  return `${opening.trimEnd()}${MIDDLE_LEFT_OUT_MARKER}${ending.trimStart()}`;
+}

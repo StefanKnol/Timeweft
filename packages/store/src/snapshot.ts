@@ -10,7 +10,7 @@
  * writer steers by, and a story chat is the writer.
  */
 import type { Kysely } from 'kysely';
-import type { ClockReading, RunSnapshot } from '@timeweft/contract';
+import type { ClockReading, RunSnapshot, ThreadRecord } from '@timeweft/contract';
 import type { Database } from './database.ts';
 import {
   clockFromRow, collisionFromRow, entryFromRow, factFromRow, legFromRow, noteFromRow,
@@ -34,11 +34,7 @@ export async function readWholeRun(database: Kysely<Database>, run: RunRow): Pro
     .innerJoin('rulings', 'rulings.id', 'ruling_about_entries.ruling_id')
     .select(['ruling_about_entries.ruling_id as owner', 'ruling_about_entries.entry_id'])
     .where('rulings.run_id', '=', runId).orderBy('ruling_about_entries.position').execute();
-  const threads = await database.selectFrom('threads').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
-  const threadAbout = await database.selectFrom('thread_about_entries')
-    .innerJoin('threads', 'threads.id', 'thread_about_entries.thread_id')
-    .select(['thread_about_entries.thread_id as owner', 'thread_about_entries.entry_id'])
-    .where('threads.run_id', '=', runId).orderBy('thread_about_entries.position').execute();
+  const threads = await readThreadRecords(database, runId);
   const waypoints = await database.selectFrom('waypoints').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
   const legs = await database.selectFrom('journey_legs').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
   const collisions = await database.selectFrom('collisions').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
@@ -47,7 +43,6 @@ export async function readWholeRun(database: Kysely<Database>, run: RunRow): Pro
     clockId: reading.clock_id, count: reading.count, partOfDay: reading.part_of_day,
   }));
   const rulingAboutByRuling = groupBy(rulingAbout, (row) => row.owner, (row) => row.entry_id);
-  const threadAboutByThread = groupBy(threadAbout, (row) => row.owner, (row) => row.entry_id);
 
   return {
     run: runFromRow(run),
@@ -57,11 +52,39 @@ export async function readWholeRun(database: Kysely<Database>, run: RunRow): Pro
     facts: facts.map(factFromRow),
     notes: notes.map(noteFromRow),
     rulings: rulings.map((row) => rulingFromRow(row, rulingAboutByRuling.get(row.id) ?? [])),
-    threads: threads.map((row) => threadFromRow(row, threadAboutByThread.get(row.id) ?? [])),
+    threads,
     waypoints: waypoints.map(waypointFromRow),
     legs: legs.map(legFromRow),
     collisions: collisions.map(collisionFromRow),
   };
+}
+
+/**
+ * A run's threads as served, in the order written, each with what it is about, its standing touches
+ * and the scene it was last touched in. Given ids, only those threads, still in the order written.
+ */
+export async function readThreadRecords(database: Kysely<Database>, runId: string, onlyThreadIds?: string[]): Promise<ThreadRecord[]> {
+  if (onlyThreadIds !== undefined && onlyThreadIds.length === 0) return [];
+  let threadQuery = database.selectFrom('threads').selectAll().where('run_id', '=', runId);
+  if (onlyThreadIds !== undefined) threadQuery = threadQuery.where('id', 'in', onlyThreadIds);
+  const threads = await threadQuery.orderBy('written_order').execute();
+  if (threads.length === 0) return [];
+  const threadIds = threads.map((thread) => thread.id);
+  const about = await database.selectFrom('thread_about_entries')
+    .select(['thread_id as owner', 'entry_id'])
+    .where('thread_id', 'in', threadIds).orderBy('position').execute();
+  const touches = await database.selectFrom('thread_touches')
+    .innerJoin('scenes', 'scenes.id', 'thread_touches.scene_id')
+    .select(['thread_touches.thread_id as owner', 'thread_touches.scene_id', 'thread_touches.note', 'scenes.number', 'scenes.status'])
+    .where('thread_touches.thread_id', 'in', threadIds).orderBy('thread_touches.written_order').execute();
+  const standingScenes = await database.selectFrom('scenes').select(['id', 'number'])
+    .where('run_id', '=', runId).where('status', '=', 'standing').execute();
+  const standing = new Map(standingScenes.map((scene) => [scene.id, scene.number]));
+  const aboutByThread = groupBy(about, (row) => row.owner, (row) => row.entry_id);
+  const touchesByThread = groupBy(touches, (row) => row.owner, (row) => ({
+    sceneId: row.scene_id, note: row.note, sceneNumber: row.number, sceneStanding: row.status === 'standing',
+  }));
+  return threads.map((row) => threadFromRow(row, aboutByThread.get(row.id) ?? [], touchesByThread.get(row.id) ?? [], standing));
 }
 
 function groupBy<Row, Value>(rows: Row[], keyOf: (row: Row) => string, valueOf: (row: Row) => Value): Map<string, Value[]> {

@@ -49,10 +49,17 @@ export function ruling(fields: Partial<RulingRecord> & { id: string; number: num
   };
 }
 
+/**
+ * A thread for a demo run. Where the scene it was last touched in is not given, it is the scene that
+ * closed it, else the one that opened it, which is what the store derives for a thread with no touches.
+ */
 export function thread(fields: Partial<ThreadRecord> & { id: string; text: string }): ThreadRecord {
   return {
     runId: 'run-demo', aboutEntryIds: [], openedInSceneId: null, closedInSceneId: null, resolution: '',
-    createdAt: MOMENT, ...fields,
+    touches: [], createdAt: MOMENT, ...fields,
+    lastTouchedInSceneId: fields.lastTouchedInSceneId !== undefined
+      ? fields.lastTouchedInSceneId
+      : (fields.closedInSceneId ?? fields.openedInSceneId ?? null),
   };
 }
 

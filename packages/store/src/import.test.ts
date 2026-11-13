@@ -120,12 +120,27 @@ test('an import chains each property by scene, whatever order the file gives, an
   }));
   const sceneIdOf = (number: number) => snapshot.scenes.find((candidate) => candidate.number === number)!.id;
   const chain = snapshot.facts.map((fact) => [fact.value, fact.fromSceneId, fact.untilSceneId]);
+  // "mending" is undated and written after "ill", so it sorts after the newest scene written before
+  // it and holds: nothing written before an undated fact is taken as newer than it.
   assert.deepEqual(chain, [
     ['well', sceneIdOf(1), sceneIdOf(2)],
-    ['mending', null, sceneIdOf(2)],
     ['weary', sceneIdOf(2), sceneIdOf(3)],
-    ['ill', sceneIdOf(3), null],
+    ['ill', sceneIdOf(3), sceneIdOf(3)],
+    ['mending', null, null],
   ]);
+});
+
+test('an undated present after a stacked history keeps last place, though its neighbour is dated early', async () => {
+  // As a field that stacks its history reads: older segments out of order, the undated present last.
+  const snapshot = await store.importRun(run('present-last', {
+    entries: [entry('Quillet', { facts: [
+      { property: 'run state', value: 'at the ford', fromScene: 3, source: 'story', note: '' },
+      { property: 'run state', value: 'at home', fromScene: 1, source: 'story', note: '' },
+      { property: 'run state', value: 'resting at the mill', fromScene: null, source: 'story', note: '' },
+    ] })],
+  }));
+  const holdingNow = snapshot.facts.filter((fact) => fact.untilSceneId === null).map((fact) => fact.value);
+  assert.deepEqual(holdingNow, ['resting at the mill']);
 });
 
 test('an import keeps every fact of a property named "(each)" holding side by side', async () => {

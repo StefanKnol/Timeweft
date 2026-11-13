@@ -177,6 +177,12 @@ function SceneInFull({ scene, snapshot }: { scene: SceneRecord; snapshot: RunSna
           <ul>{established.threadsOpened.map((thread) => <li key={thread.id}>{thread.text}</li>)}</ul>
         </>
       )}
+      {established.threadsTouched.length > 0 && (
+        <>
+          <h5>Threads moved on</h5>
+          <ul>{established.threadsTouched.map(({ thread, note }) => <li key={thread.id}>{thread.text}{note === '' ? '' : `: ${note}`}</li>)}</ul>
+        </>
+      )}
       {established.threadsClosed.length > 0 && (
         <>
           <h5>Threads closed</h5>

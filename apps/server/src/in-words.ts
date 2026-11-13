@@ -11,6 +11,7 @@ import type {
   AnswerByOperation, Briefing, ImportedRunReport, CollisionRecord, EntryLookup, FactRecord, FoundItem, Id, OperationName,
   RulingRecord, RunListing, RunSnapshot, SavedScene, SceneInFull, SceneRecord, SceneSummary, ThreadRecord,
 } from '@timeweft/contract';
+import { onOneLine } from '@timeweft/briefing';
 
 export interface NamesInTheRun {
   entryNames: ReadonlyMap<Id, string>;
@@ -105,6 +106,9 @@ export function savedSceneInWords(saved: SavedScene, names: NamesInTheRun): stri
   if (saved.threadsOpened.length > 0) {
     lines.push('Threads opened:', bulletList(saved.threadsOpened.map((thread) => `${thread.id}: ${thread.text}`), ''));
   }
+  if (saved.threadsTouched.length > 0) {
+    lines.push('Threads touched:', bulletList(saved.threadsTouched.map((thread) => touchedThreadInWords(thread, saved.scene.id)), ''));
+  }
   if (saved.threadsClosed.length > 0) {
     lines.push('Threads closed:', bulletList(saved.threadsClosed.map((thread) => `${thread.text} (${thread.resolution})`), ''));
   }
@@ -132,6 +136,7 @@ export function sceneInFullInWords(inFull: SceneInFull, names: NamesInTheRun): s
   if (inFull.notes.length > 0) lines.push('Notes:', bulletList(inFull.notes.map((note) => `${entryName(names, note.entryId)}: ${note.text}`), ''));
   if (inFull.rulings.length > 0) lines.push('Rulings given:', bulletList(inFull.rulings.map((ruling) => `Ruling ${ruling.number}: ${ruling.text}`), ''));
   if (inFull.threadsOpened.length > 0) lines.push('Threads opened:', bulletList(inFull.threadsOpened.map((thread) => thread.text), ''));
+  if (inFull.threadsTouched.length > 0) lines.push('Threads touched:', bulletList(inFull.threadsTouched.map((thread) => touchedThreadInWords(thread, scene.id)), ''));
   if (inFull.threadsClosed.length > 0) lines.push('Threads closed:', bulletList(inFull.threadsClosed.map((thread) => `${thread.text} (${thread.resolution})`), ''));
   // The briefing says read_scene fetches the journeys it left out, so they are said here.
   if (inFull.legs.length > 0) {
@@ -179,11 +184,32 @@ export function rulingsInWords(rulings: RulingRecord[], names: NamesInTheRun): s
   return rulings.length === 0 ? 'No rulings bear on that.' : rulings.map((ruling) => rulingInWords(ruling, names)).join('\n\n');
 }
 
+/**
+ * A thread a scene touched, with what moved in that scene where it said. The note is said on one
+ * line, as a briefing says it, so a line break in it cannot start a bullet of its own.
+ */
+function touchedThreadInWords(thread: ThreadRecord, sceneId: string): string {
+  const note = onOneLine(thread.touches.find((touch) => touch.sceneId === sceneId)?.note ?? '');
+  return `${thread.id}: ${thread.text}${note === '' ? '' : ` (moved: ${note})`}`;
+}
+
+/**
+ * Threads in the order given, which is list_threads's ranking: the one a scene moved last first.
+ * Each line says the scene it opened in and, where that differs, the scene it was last touched in
+ * (opened, touched or closed), with what moved where that touch said: the same as a briefing.
+ */
 export function threadsInWords(threads: ThreadRecord[], names: NamesInTheRun): string {
   return bulletList(threads.map((thread) => {
     const about = thread.aboutEntryIds.length === 0 ? '' : ` (about ${thread.aboutEntryIds.map((entryId) => entryName(names, entryId)).join(', ')})`;
     const state = thread.closedInSceneId === null ? 'open' : `closed: ${thread.resolution}`;
-    return `${thread.id}: ${thread.text}${about}, ${state}`;
+    const opened = sceneLabel(names, thread.openedInSceneId);
+    const lastTouched = sceneLabel(names, thread.lastTouchedInSceneId);
+    const lastNote = thread.lastTouchedInSceneId === null ? '' : onOneLine(thread.touches.find((touch) => touch.sceneId === thread.lastTouchedInSceneId)?.note ?? '');
+    const when = [
+      opened === null ? '' : `opened ${opened}`,
+      lastTouched === null || lastTouched === opened ? '' : `last touched ${lastTouched}${lastNote === '' ? '' : `: ${lastNote}`}`,
+    ].filter((part) => part !== '').join(', ');
+    return `${thread.id}: ${thread.text}${about}, ${state}${when === '' ? '' : `; ${when}`}`;
   }), 'No threads.');
 }
 
@@ -206,6 +232,10 @@ export function importedRunInWords(report: ImportedRunReport): string {
     `Imported run ${report.run.slug}: "${report.run.title}".`,
     `${plural(counts.scenes, 'scene', 'scenes')}, ${plural(counts.entries, 'entry', 'entries')}, ${plural(counts.facts, 'fact', 'facts')}, ${plural(counts.trailNotes, 'trail note', 'trail notes')}, ${plural(counts.rulings, 'ruling', 'rulings')}, ${plural(counts.threads, 'thread', 'threads')}, ${plural(counts.waypoints, 'waypoint', 'waypoints')}, ${plural(counts.journeyLegs, 'journey leg', 'journey legs')}, ${plural(counts.clocks, 'clock', 'clocks')}.`,
   ];
+  const removed = report.removedEarlierImport ?? null;
+  if (removed !== null) {
+    lines.push(`It replaced the earlier import, which held ${plural(removed.scenes, 'scene', 'scenes')}, ${plural(removed.entries, 'entry', 'entries')}, ${plural(removed.facts, 'fact', 'facts')}, ${plural(removed.trailNotes, 'trail note', 'trail notes')}, ${plural(removed.rulings, 'ruling', 'rulings')}, ${plural(removed.threads, 'thread', 'threads')}, ${plural(removed.waypoints, 'waypoint', 'waypoints')}, ${plural(removed.journeyLegs, 'journey leg', 'journey legs')}, ${plural(removed.clocks, 'clock', 'clocks')}, and was removed.`);
+  }
   if (report.unplaced.length === 0) {
     lines.push('Every line was placed.');
   } else {

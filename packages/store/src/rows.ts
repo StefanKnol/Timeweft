@@ -79,11 +79,40 @@ export function rulingFromRow(row: RulingRow, aboutEntryIds: string[]): RulingRe
   };
 }
 
-export function threadFromRow(row: ThreadRow, aboutEntryIds: string[]): ThreadRecord {
+/** A touch as read with its scene's number and status, which decide whether and where it counts. */
+export interface TouchAsRead {
+  sceneId: string;
+  note: string;
+  sceneNumber: number;
+  sceneStanding: boolean;
+}
+
+/** A scene's number where it is standing; what decides which scene a thread last moved in. */
+export type StandingSceneNumbers = ReadonlyMap<string, number>;
+
+/**
+ * A thread as served. Its touches are the standing ones, oldest scene first, and the scene it was
+ * last touched in is derived here, as the newest standing scene among its opening, its touches and
+ * its closing. Nothing stores either.
+ */
+export function threadFromRow(row: ThreadRow, aboutEntryIds: string[], touches: TouchAsRead[], standing: StandingSceneNumbers): ThreadRecord {
+  const counted = touches.filter((touch) => touch.sceneStanding).sort((left, right) => left.sceneNumber - right.sceneNumber);
+  let lastTouchedInSceneId: string | null = null;
+  let lastNumber = Number.NEGATIVE_INFINITY;
+  for (const sceneId of [row.opened_in_scene_id, ...counted.map((touch) => touch.sceneId), row.closed_in_scene_id]) {
+    if (sceneId === null) continue;
+    const number = standing.get(sceneId);
+    if (number === undefined || number <= lastNumber) continue;
+    lastNumber = number;
+    lastTouchedInSceneId = sceneId;
+  }
   return {
     id: row.id, runId: row.run_id, text: row.text, aboutEntryIds,
     openedInSceneId: row.opened_in_scene_id, closedInSceneId: row.closed_in_scene_id,
-    resolution: row.resolution, createdAt: asText(row.created_at),
+    resolution: row.resolution,
+    touches: counted.map((touch) => ({ sceneId: touch.sceneId, note: touch.note })),
+    lastTouchedInSceneId,
+    createdAt: asText(row.created_at),
   };
 }
 

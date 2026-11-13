@@ -3,6 +3,11 @@
  *
  *   pnpm --filter @timeweft/server import-run -- --folder <dir> --slug <slug>
  *     [--title ..] [--setting ..] [--status binding|telling] [--unplaced-report <file>]
+ *     [--replace-earlier-import]
+ *
+ * With --replace-earlier-import, a run of that slug an earlier import made is removed and the
+ * files are imported in its place, in one transaction. The store refuses it where the run holds
+ * anything written after its import, or where another run continues from it.
  *
  * It prints counts only. The files are the author's canon, and a console is where text ends up in
  * logs, so not one line of them is printed. What the reader could not place is written to the
@@ -12,7 +17,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { RUN_STATUSES, Refusal, type ImportedRunReport, type RunStatus, type Store, type WeaverFiles } from '@timeweft/contract';
+import { EarlierImportStandsInTheWay, RUN_STATUSES, Refusal, RunAlreadyExists, type ImportedRunReport, type RunStatus, type Store, type WeaverFiles } from '@timeweft/contract';
 import { openStore } from '@timeweft/store';
 import { DatabaseAddressNotSet, databaseAddressFromEnvironment } from './database-address.ts';
 import { NothingToImport, RUN_FILE_NAMES, importWeaverFiles, type ImportOptions } from './import-a-run.ts';
@@ -24,6 +29,7 @@ export interface ImportRequest {
   setting?: string;
   status?: RunStatus;
   unplacedReport?: string;
+  replaceEarlierImport?: boolean;
 }
 
 export function importRequestFromArguments(argumentsGiven: string[]): ImportRequest {
@@ -36,6 +42,7 @@ export function importRequestFromArguments(argumentsGiven: string[]): ImportRequ
       setting: { type: 'string' },
       status: { type: 'string' },
       'unplaced-report': { type: 'string' },
+      'replace-earlier-import': { type: 'boolean' },
     },
     strict: true,
   });
@@ -52,6 +59,7 @@ export function importRequestFromArguments(argumentsGiven: string[]): ImportRequ
     request.status = values.status as RunStatus;
   }
   if (values['unplaced-report'] !== undefined) request.unplacedReport = values['unplaced-report'];
+  if (values['replace-earlier-import'] === true) request.replaceEarlierImport = true;
   return request;
 }
 
@@ -108,6 +116,25 @@ export function countsInWords(report: ImportedRunReport): string[] {
     `Journey legs: ${counts.journeyLegs}`,
     `Clocks: ${counts.clocks}`,
     `Unplaced lines: ${report.unplaced.length}`,
+    ...removedInWords(report),
+  ];
+}
+
+/** The counts of the earlier import a replacing import removed, or nothing where none was replaced. */
+function removedInWords(report: ImportedRunReport): string[] {
+  const removed = report.removedEarlierImport ?? null;
+  if (removed === null) return [];
+  return [
+    'It replaced the earlier import, which was removed. It held:',
+    `  Scenes: ${removed.scenes}`,
+    `  Entries: ${removed.entries}`,
+    `  Facts: ${removed.facts}`,
+    `  Trail notes: ${removed.trailNotes}`,
+    `  Rulings: ${removed.rulings}`,
+    `  Threads: ${removed.threads}`,
+    `  Waypoints: ${removed.waypoints}`,
+    `  Journey legs: ${removed.journeyLegs}`,
+    `  Clocks: ${removed.clocks}`,
   ];
 }
 
@@ -117,13 +144,19 @@ export async function importRun(store: Store, request: ImportRequest): Promise<s
   if (request.title !== undefined) options.title = request.title;
   if (request.setting !== undefined) options.setting = request.setting;
   if (request.status !== undefined) options.status = request.status;
+  if (request.replaceEarlierImport === true) options.replaceEarlierImport = true;
   const files = await readFolder(request.folder);
   let report: ImportedRunReport;
   try {
     report = await importWeaverFiles(store, files, options);
   } catch (error) {
     // Five empty files quote nothing, so that refusal is said as it is.
-    if (!(error instanceof Refusal) || error instanceof NothingToImport) throw error;
+    if (!(error instanceof Refusal) || error instanceof NothingToImport || error instanceof EarlierImportStandsInTheWay) throw error;
+    // A slug already taken names only the slug, so it is said, with the flag that replaces it.
+    if (error instanceof RunAlreadyExists) {
+      if (!error.madeByAnImport) throw error;
+      throw new Refusal(`A run called "${request.slug}" already exists, so nothing was written. To replace its earlier import with these files, run the command again with --replace-earlier-import.`);
+    }
     // The store's refusal names what it could not resolve, which quotes the files, so it goes to
     // the report and never to the console.
     if (request.unplacedReport === undefined) {

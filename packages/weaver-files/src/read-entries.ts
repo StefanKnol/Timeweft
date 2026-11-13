@@ -172,6 +172,7 @@ export function readEntryFile(text: string, shape: FileShape): EntriesRead {
 }
 
 function readEntryLines(lines: NumberedLine[], entry: ImportedEntry, fileName: string, unplaced: string[]): void {
+  const trailNotesBefore = entry.trail.length;
   const { bullets, strays } = bulletsOf(lines);
   for (const stray of strays) {
     unplaced.push(`${fileName} line ${stray.lineNumber}: a line under ${'an entry'} that is not a bullet and follows none.`);
@@ -221,6 +222,52 @@ function readEntryLines(lines: NumberedLine[], entry: ImportedEntry, fileName: s
     unplaced.push(`${fileName} line ${bullet.lineNumber}: a bullet with neither a label nor a scene number, so it is neither a fact nor a trail note.`);
   }
   markAdditiveRecords(labelledBullets);
+  entry.facts.push(...factsSplitOffTrailNotes(entry, entry.trail.slice(trailNotesBefore)));
+}
+
+/** The one label a trail note's closing sentence is read for even where no bullet carries it. */
+export const LAST_SEEN_PROPERTY = 'last seen';
+
+/**
+ * A trail note's closing sentence written "Label: value", after a sentence end, where the label is
+ * a short phrase with no sentence in it. Answers the note without it, the label and the value.
+ */
+export function closingLabelledSentence(text: string): { rest: string; label: string; value: string } | null {
+  // The value is one sentence: a full stop inside it counts only where no space follows it.
+  const match = /(^|[.!?)"”’]\s+)(\p{Lu}[^:.!?\n()]{0,40}?):\s+((?:[^.!?\n]|[.!?](?=\S))+)[.!?]?\s*$/u.exec(text);
+  if (!match) return null;
+  const label = (match[2] ?? '').trim();
+  const value = (match[3] ?? '').trim().replace(/[.;]+$/, '').trim();
+  if (label === '' || value === '') return null;
+  const rest = text.slice(0, match.index + (match[1] ?? '').length).trim();
+  return { rest, label, value };
+}
+
+/**
+ * A hand-kept trail note often ends by restating a labelled fact as of its own scene, "... Last
+ * seen: Scene 12, the ford.", while the labelled bullet itself was written once and never touched
+ * again. Such a closing sentence is a fact of the note's scene: it is split off the note, which
+ * keeps the rest, and filed under its label. The label counts where it is "last seen" or a
+ * property a labelled bullet of the same entry already carries, so no other sentence that happens
+ * to hold a colon is read as a fact. Where two notes of one scene restate one property, the later
+ * written is kept. These facts chain with the bullet's: the newest scene holds, and the bullet's
+ * older value is closed history.
+ */
+function factsSplitOffTrailNotes(entry: ImportedEntry, notes: ImportedEntry['trail']): ImportedFact[] {
+  const labelledProperties = new Set(entry.facts.map((fact) => fact.property));
+  const factsByPropertyAndScene = new Map<string, ImportedFact>();
+  for (const note of notes) {
+    const closing = closingLabelledSentence(note.text);
+    if (closing === null) continue;
+    const property = closing.label.toLowerCase();
+    if (property !== LAST_SEEN_PROPERTY && !labelledProperties.has(property)) continue;
+    // A note that is nothing but the sentence keeps it, so the note still says something.
+    if (closing.rest !== '') note.text = closing.rest;
+    factsByPropertyAndScene.set(`${property}\u0000${note.scene}`, {
+      property, value: closing.value, fromScene: note.scene, source: 'story', note: `From the trail note of scene ${note.scene}.`,
+    });
+  }
+  return [...factsByPropertyAndScene.values()];
 }
 
 /** The suffix that tells the store a property's facts are additive records, never chained. */

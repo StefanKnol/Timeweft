@@ -18,7 +18,7 @@ function runOfState(state: string) {
   return readWeaverFiles(files, { slug: 'demo' });
 }
 
-test("a relative clock's description is the sentences that define it, never the stacked present", () => {
+test("a relative clock's description is what day +0 is, never the stacked present nor a named clock's definition", () => {
   const stackedPresent = Array.from({ length: 30 }, (_, index) =>
     `Before that, flood day +${index + 2} at the ford, waiting out the rain.`).join(' ');
   const run = runOfState(`# State
@@ -30,7 +30,7 @@ test("a relative clock's description is the sentences that define it, never the 
 `);
   const relative = run.clocks.find((clock) => clock.name === 'flood');
   assert.ok(relative);
-  assert.equal(relative.countsFrom, 'Mill clock: Mill Day 1 = the day the ferry came, = flood day +3.');
+  assert.equal(relative.countsFrom, 'Days after the eve of the flood, written "day +N".');
   assert.doesNotMatch(relative.countsFrom, /waiting out the rain/);
   assert.doesNotMatch(relative.countsFrom, /Mill Day 9/);
 });
@@ -44,7 +44,7 @@ test('a relative clock still takes its name from the present where only the pres
 `);
   const [relative] = run.clocks;
   assert.equal(relative?.name, 'harvest');
-  assert.equal(relative?.countsFrom, 'Run began: the eve of the harvest, and scenes are stamped relative to it.');
+  assert.equal(relative?.countsFrom, 'Days after the eve of the harvest, and scenes are stamped relative to it, written "day +N".');
 });
 
 test("the present is dated by its own scene, not by a later segment kept with it", () => {

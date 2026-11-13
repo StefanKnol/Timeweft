@@ -7,9 +7,10 @@
  */
 import type { ImportedEntry, ImportedRun, RunStatus, WeaverFiles } from '@timeweft/contract';
 import { nameFinderFor } from './names-in-text.ts';
-import { readCast, readItems, readPlaces, factsOfLabelledBullet, type EntriesRead } from './read-entries.ts';
+import { readCast, readItems, readPlaces, factsOfLabelledBullet, LAST_SEEN_PROPERTY, type EntriesRead } from './read-entries.ts';
 import { readLog } from './read-log.ts';
-import { readState, type StateRead } from './read-state.ts';
+import { readState, type ClockDefinition, type StateRead } from './read-state.ts';
+import { escapeForRegularExpression } from './text-helpers.ts';
 
 export interface ReadWeaverFilesOptions {
   slug: string;
@@ -41,7 +42,7 @@ export function readWeaverFiles(files: WeaverFiles, options: ReadWeaverFilesOpti
   const names = nameFinderFor(allNames);
 
   const emptyState: StateRead = {
-    clocks: [], situation: '', register: '', rulings: [], threads: [], waypoints: [],
+    clocks: [], situation: '', settingLines: [], register: '', rulings: [], threads: [], waypoints: [],
     runStateLines: [], stackedHistoryBytes: 0, stackedHistoryLines: [], unplaced: [],
   };
   const state = safely('state.md', () => readState(files.state ?? '', names), emptyState, unplaced);
@@ -49,6 +50,9 @@ export function readWeaverFiles(files: WeaverFiles, options: ReadWeaverFilesOpti
   const log = safely('log.md', () => readLog(files.log ?? '', state.clocks, placeNames), { title: '', scenes: [], unplaced: [] }, unplaced);
 
   fileRunStateUnderEntries(state, entries, unplaced);
+  bringLastSeenUpToTheNewestScene(entries, log.scenes, unplaced);
+  dateThreadsByTheClockCountsTheyName(state.threads, state.clocks, log.scenes);
+  keepTouchesOnScenesTheLogHas(state.threads, log.scenes);
 
   const lastScene = log.scenes[log.scenes.length - 1];
   if (state.situation !== '') {
@@ -62,7 +66,7 @@ export function readWeaverFiles(files: WeaverFiles, options: ReadWeaverFilesOpti
   return {
     slug: options.slug,
     title: options.title ?? (log.title !== '' ? log.title : options.slug),
-    setting: options.setting ?? '',
+    setting: [options.setting ?? '', ...state.settingLines].filter((part) => part !== '').join('\n'),
     status: options.status ?? 'binding',
     register: state.register,
     clocks: state.clocks.map((clock) => ({ name: clock.name, countsFrom: clock.countsFrom })),
@@ -99,6 +103,82 @@ function fileRunStateUnderEntries(state: StateRead, entries: ImportedEntry[], un
       entries.push(entry);
     }
     entry.facts.push(...factsOfLabelledBullet('run state', line.text));
+  }
+}
+
+/**
+ * "Last seen" never holds an older scene than the files know of. Where an entry carries a "last
+ * seen" fact and a newer scene names it (a trail note of its own, or, for a place, a scene set
+ * there) than any "last seen" fact says, a fact of that newest scene is added, "Scene N, <the
+ * scene's place>", and the older hand-written value is closed history. Nothing is invented: the
+ * scene and its place are the log's. An entry with no "last seen" fact gains none.
+ */
+function bringLastSeenUpToTheNewestScene(entries: ImportedEntry[], scenes: ImportedRun['scenes'], unplaced: string[]): void {
+  const placeOfScene = new Map(scenes.map((scene) => [scene.number, scene.place]));
+  let broughtUp = 0;
+  for (const entry of entries) {
+    const lastSeenFacts = entry.facts.filter((fact) => fact.property === LAST_SEEN_PROPERTY);
+    if (lastSeenFacts.length === 0) continue;
+    const namesOfEntry = [entry.name, ...entry.alsoKnownAs].map((name) => name.toLowerCase());
+    const seenInScenes = [
+      ...entry.trail.map((note) => note.scene),
+      ...(entry.kind === 'place'
+        ? scenes.filter((scene) => scene.place !== null && namesOfEntry.includes(scene.place.toLowerCase())).map((scene) => scene.number)
+        : []),
+    ].filter((number) => placeOfScene.has(number));
+    if (seenInScenes.length === 0) continue;
+    const newestSeen = Math.max(...seenInScenes);
+    const newestSaid = Math.max(...lastSeenFacts.map((fact) => fact.fromScene ?? Number.NEGATIVE_INFINITY));
+    if (newestSaid >= newestSeen) continue;
+    const place = placeOfScene.get(newestSeen) ?? null;
+    entry.facts.push({
+      property: LAST_SEEN_PROPERTY,
+      value: place === null || entry.kind === 'place' ? `Scene ${newestSeen}` : `Scene ${newestSeen}, ${place}`,
+      fromScene: newestSeen,
+      source: 'story',
+      note: `From the newest scene that names it (scene ${newestSeen}); the hand-kept line was older.`,
+    });
+    broughtUp += 1;
+  }
+  if (broughtUp > 0) {
+    unplaced.push(`cast.md, items.md, places.md: ${broughtUp} ${broughtUp === 1 ? 'entry\'s' : 'entries\''} "last seen" line was older than the newest scene naming ${broughtUp === 1 ? 'it' : 'them'}, so a "last seen" of that scene was added and the hand-kept line kept as closed history.`);
+  }
+}
+
+/**
+ * A thread's touches are kept only on scenes the log has, and after the scene it opened in, which
+ * a clock count may have dated since its text was read. A scene the log lacks is a scene named in
+ * passing, not one the run can point at, so it is left out rather than refusing the import.
+ */
+function keepTouchesOnScenesTheLogHas(threads: ImportedRun['threads'], scenes: ImportedRun['scenes']): void {
+  const sceneNumbers = new Set(scenes.map((scene) => scene.number));
+  for (const thread of threads) {
+    thread.touchedInScenes = (thread.touchedInScenes ?? []).filter((number) =>
+      sceneNumbers.has(number) && (thread.openedInScene === null || number > thread.openedInScene));
+  }
+}
+
+/**
+ * A thread that names no scene may still say when it opened by a clock count ("on day +3", "Mill
+ * Day 4"). It is dated to the first scene whose reading of that clock is that count, the earliest
+ * where it names several. A count no scene reads leaves it undated.
+ */
+function dateThreadsByTheClockCountsTheyName(threads: ImportedRun['threads'], clocks: ClockDefinition[], scenes: ImportedRun['scenes']): void {
+  for (const thread of threads) {
+    if (thread.openedInScene !== null) continue;
+    const candidates: number[] = [];
+    for (const clock of clocks) {
+      const pattern = clock.form === 'named'
+        ? (clock.prefixWords.length === 0 ? null : new RegExp(`\\b${clock.prefixWords.map(escapeForRegularExpression).join('\\s+')}\\s+Day\\s+(\\d+)(?!\\d|\\.\\d)`, 'gi'))
+        : /\bday\s*\+\s*(\d+)(?!\d|\.\d)/gi;
+      if (pattern === null) continue;
+      for (const match of thread.text.matchAll(pattern)) {
+        const count = String(Number(match[1]));
+        const scene = scenes.find((candidate) => candidate.readings.some((reading) => reading.clock === clock.name && String(Number(reading.count)) === count));
+        if (scene) candidates.push(scene.number);
+      }
+    }
+    if (candidates.length > 0) thread.openedInScene = Math.min(...candidates);
   }
 }
 

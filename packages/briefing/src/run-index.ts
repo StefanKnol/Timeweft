@@ -30,7 +30,7 @@ export function compareText(left: string, right: string): number {
 }
 
 export function compareScenesOldestFirst(left: SceneRecord, right: SceneRecord): number {
-  return left.number - right.number || compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id);
+  return left.number - right.number || compareText(left.createdAt, right.createdAt);
 }
 
 export function indexRun(snapshot: RunSnapshot): RunIndex {
@@ -74,52 +74,132 @@ export function newestStandingScene(index: RunIndex): SceneRecord | null {
   return index.standingScenes[index.standingScenes.length - 1] ?? null;
 }
 
-/** Holding facts of one entry: still open, and not from a struck scene. Ordered for reading. */
+/**
+ * Holding facts of one entry: still open, and not from a struck scene. Ordered for reading. Things
+ * written at one moment keep the order they were written in; no order here falls back on an id,
+ * which is random and would differ between two stores holding the same run.
+ */
 export function holdingFactsOf(index: RunIndex, entryId: Id): FactRecord[] {
   const facts = (index.servableFactsByEntry.get(entryId) ?? []).filter((fact) => fact.untilSceneId === null);
   return facts.sort((left, right) =>
     compareText(left.property, right.property)
     || (sceneNumberOf(index, left.fromSceneId) ?? 0) - (sceneNumberOf(index, right.fromSceneId) ?? 0)
-    || compareText(left.createdAt, right.createdAt)
-    || compareText(left.id, right.id));
+    || compareText(left.createdAt, right.createdAt));
 }
 
 /** The facts that no longer hold, newest first: by the scene that closed them, then the one that began them. */
 export function closedFactsOf(index: RunIndex, entryId: Id): FactRecord[] {
   const facts = (index.servableFactsByEntry.get(entryId) ?? []).filter((fact) => fact.untilSceneId !== null);
-  return facts.sort((left, right) =>
+  // Turned round first: a sort keeps equal things in the order it met them, and the newest written comes first here.
+  return facts.reverse().sort((left, right) =>
     (sceneNumberOf(index, right.untilSceneId) ?? 0) - (sceneNumberOf(index, left.untilSceneId) ?? 0)
     || (sceneNumberOf(index, right.fromSceneId) ?? 0) - (sceneNumberOf(index, left.fromSceneId) ?? 0)
-    || compareText(right.createdAt, left.createdAt)
-    || compareText(right.id, left.id));
+    || compareText(right.createdAt, left.createdAt));
 }
 
 /** One entry's trail, newest first. */
 export function trailNewestFirstOf(index: RunIndex, entryId: Id): EntryNoteRecord[] {
   const notes = [...(index.servableNotesByEntry.get(entryId) ?? [])];
-  return notes.sort((left, right) =>
+  return notes.reverse().sort((left, right) =>
     (sceneNumberOf(index, right.sceneId) ?? 0) - (sceneNumberOf(index, left.sceneId) ?? 0)
-    || compareText(right.createdAt, left.createdAt)
-    || compareText(right.id, left.id));
+    || compareText(right.createdAt, left.createdAt));
 }
 
 /** Rulings still in force and not given in a struck scene, oldest first by their number. */
 export function rulingsInForce(index: RunIndex): RulingRecord[] {
   return index.snapshot.rulings
     .filter((ruling) => ruling.withdrawnInSceneId === null && !wasEstablishedInAStruckScene(index, ruling.sceneId))
-    .sort((left, right) => left.number - right.number || compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id));
+    .sort((left, right) => left.number - right.number || compareText(left.createdAt, right.createdAt));
 }
 
-/** Threads not opened in a struck scene, oldest first. */
+/**
+ * Threads not opened in a struck scene, oldest first. Two threads opened in one scene and written
+ * in one batch keep the order they were written in, never the order of their ids, which are random.
+ */
 export function servableThreads(index: RunIndex): ThreadRecord[] {
+  const writtenPosition = writtenPositionsOfThreads(index);
   return index.snapshot.threads
     .filter((thread) => !wasEstablishedInAStruckScene(index, thread.openedInSceneId))
     .sort((left, right) =>
       (sceneNumberOf(index, left.openedInSceneId) ?? 0) - (sceneNumberOf(index, right.openedInSceneId) ?? 0)
       || compareText(left.createdAt, right.createdAt)
-      || compareText(left.id, right.id));
+      || (writtenPosition.get(left) ?? 0) - (writtenPosition.get(right) ?? 0));
+}
+
+/** Where each thread stands in the snapshot, which is the order the store wrote them in. */
+export function writtenPositionsOfThreads(index: RunIndex): Map<ThreadRecord, number> {
+  return new Map(index.snapshot.threads.map((thread, position) => [thread, position]));
+}
+
+/**
+ * The number of the newest standing scene that moved a thread: the one the store says it was last
+ * touched in, or failing that the newest standing among its opening, its touches and its closing.
+ * A struck take's scene never counts. Null where none of them is a standing scene of the run.
+ */
+export function lastTouchedSceneNumberOf(index: RunIndex, thread: ThreadRecord): number | null {
+  let newest: number | null = null;
+  for (const sceneId of [thread.lastTouchedInSceneId, thread.openedInSceneId, ...thread.touches.map((touch) => touch.sceneId), thread.closedInSceneId]) {
+    if (sceneId === null || wasEstablishedInAStruckScene(index, sceneId)) continue;
+    const number = sceneNumberOf(index, sceneId);
+    if (number !== null && (newest === null || number > newest)) newest = number;
+  }
+  return newest;
+}
+
+/**
+ * Threads ranked so the one a scene moved last comes first: by the scene each was last touched in
+ * (opened, touched or closed), the newest first; then by the scene it was opened in, the newest
+ * first; then by its place in the snapshot, which is the order the store wrote them, the latest
+ * first. A scene that is not known (none was recorded, or the one named is not a standing scene of
+ * the run) ranks after every known one at that step. Never by id, since ids are random.
+ */
+export function threadsLastTouchedFirst(index: RunIndex, threads: ThreadRecord[]): ThreadRecord[] {
+  const writtenPosition = writtenPositionsOfThreads(index);
+  const newestFirst = (left: number | null, right: number | null): number => {
+    if (left === null && right !== null) return 1;
+    if (left !== null && right === null) return -1;
+    return (right ?? 0) - (left ?? 0);
+  };
+  return [...threads].sort((left, right) =>
+    newestFirst(lastTouchedSceneNumberOf(index, left), lastTouchedSceneNumberOf(index, right))
+    || newestFirst(sceneNumberOf(index, left.openedInSceneId), sceneNumberOf(index, right.openedInSceneId))
+    || (writtenPosition.get(right) ?? 0) - (writtenPosition.get(left) ?? 0));
+}
+
+/** The open threads a briefing serves, the one a scene moved last first (threadsLastTouchedFirst says how). */
+export function openThreadsNewestFirst(index: RunIndex): ThreadRecord[] {
+  return threadsLastTouchedFirst(index, servableThreads(index).filter((thread) => thread.closedInSceneId === null));
 }
 
 export function entryNameOf(index: RunIndex, entryId: Id): string | null {
   return index.entryById.get(entryId)?.name ?? null;
+}
+
+/** How many standing trail notes an entry has: notes written in a struck scene are not counted. */
+export function trailCountOf(index: RunIndex, entryId: Id): number {
+  return index.servableNotesByEntry.get(entryId)?.length ?? 0;
+}
+
+/**
+ * Where each entry stands in the snapshot, which is the order the store wrote them in. Ties that
+ * names cannot break are broken by it, never by id, since ids are random.
+ */
+export function writtenPositionsOfEntries(index: RunIndex): Map<Id, number> {
+  return new Map(index.snapshot.entries.map((entry, position) => [entry.id, position]));
+}
+
+/**
+ * The main character: the entry with the most standing trail notes in the whole run, ties going
+ * to the name that sorts first and then to the one written first. In a long run that is the one
+ * the story is told through, present in every scene. Undefined where no entry has a trail. This
+ * is the one home of the rule: the briefing serves this entry first, and the people a chat may
+ * attach are led by it.
+ */
+export function mainCharacterInIndex(index: RunIndex): EntryRecord | undefined {
+  const writtenPosition = writtenPositionsOfEntries(index);
+  return [...index.snapshot.entries]
+    .filter((entry) => trailCountOf(index, entry.id) > 0)
+    .sort((left, right) => trailCountOf(index, right.id) - trailCountOf(index, left.id)
+      || compareText(left.name, right.name)
+      || (writtenPosition.get(left.id) ?? 0) - (writtenPosition.get(right.id) ?? 0))[0];
 }

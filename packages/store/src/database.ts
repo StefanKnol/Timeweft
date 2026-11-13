@@ -15,6 +15,8 @@ import { Kysely, PostgresDialect, type ColumnType, type Generated } from 'kysely
 
 type CreatedAt = ColumnType<Date, Date | undefined, never>;
 type WrittenOrder = ColumnType<string, never, never>;
+/** A mark from one sequence, taken when the row is written, so later rows carry higher marks. */
+type WriteMark = ColumnType<string, never, never>;
 
 export interface RunsTable {
   id: string;
@@ -25,6 +27,12 @@ export interface RunsTable {
   continues_run_id: string | null;
   register: string;
   created_at: CreatedAt;
+  /**
+   * The write mark taken after an import's last row, or null for a run begun in a chat (or imported
+   * before marks were kept and not datable). A row of the run with a higher mark was written after
+   * the import. Never reaches a record.
+   */
+  imported_through: ColumnType<string | null, string | null | undefined, string | null>;
 }
 
 export interface ClocksTable {
@@ -34,6 +42,7 @@ export interface ClocksTable {
   counts_from: string;
   position: number;
   created_at: CreatedAt;
+  write_mark: WriteMark;
 }
 
 export interface ScenesTable {
@@ -50,6 +59,7 @@ export interface ScenesTable {
   situation_after: string;
   status: string;
   created_at: CreatedAt;
+  write_mark: WriteMark;
   written_order: WrittenOrder;
 }
 
@@ -72,6 +82,7 @@ export interface EntriesTable {
   source: string;
   visibility: string;
   created_at: CreatedAt;
+  write_mark: WriteMark;
   written_order: WrittenOrder;
 }
 
@@ -90,6 +101,7 @@ export interface FactsTable {
   established_by_scene_id: string | null;
   closed_by_scene_id: string | null;
   created_at: CreatedAt;
+  write_mark: WriteMark;
   written_order: WrittenOrder;
 }
 
@@ -101,6 +113,7 @@ export interface EntryNotesTable {
   text: string;
   visibility: string;
   created_at: CreatedAt;
+  write_mark: WriteMark;
   written_order: WrittenOrder;
 }
 
@@ -116,6 +129,7 @@ export interface RulingsTable {
   withdrawn_in_scene_id: string | null;
   established_by_scene_id: string | null;
   created_at: CreatedAt;
+  write_mark: WriteMark;
 }
 
 export interface RulingAboutEntriesTable {
@@ -134,6 +148,7 @@ export interface ThreadsTable {
   established_by_scene_id: string | null;
   closed_by_scene_id: string | null;
   created_at: CreatedAt;
+  write_mark: WriteMark;
   written_order: WrittenOrder;
 }
 
@@ -141,6 +156,17 @@ export interface ThreadAboutEntriesTable {
   thread_id: string;
   entry_id: string;
   position: number;
+}
+
+/** A scene that moved a thread on. Whether it counts is read off the scene's status. */
+export interface ThreadTouchesTable {
+  thread_id: string;
+  scene_id: string;
+  note: string;
+  /** The scene whose save wrote this touch; null where an import wrote it. */
+  written_by_scene_id: string | null;
+  created_at: CreatedAt;
+  written_order: WrittenOrder;
 }
 
 export interface WaypointsTable {
@@ -151,6 +177,7 @@ export interface WaypointsTable {
   /** The scene whose save reached it, so a redo of that scene un-reaches it. Null where an import dated it. */
   reached_by_scene_id: Generated<string | null>;
   created_at: CreatedAt;
+  write_mark: WriteMark;
   written_order: WrittenOrder;
 }
 
@@ -163,6 +190,7 @@ export interface JourneyLegsTable {
   note: string;
   scene_id: string | null;
   created_at: CreatedAt;
+  write_mark: WriteMark;
   written_order: WrittenOrder;
 }
 
@@ -198,6 +226,7 @@ export interface Database {
   ruling_about_entries: RulingAboutEntriesTable;
   threads: ThreadsTable;
   thread_about_entries: ThreadAboutEntriesTable;
+  thread_touches: ThreadTouchesTable;
   waypoints: WaypointsTable;
   journey_legs: JourneyLegsTable;
   collisions: CollisionsTable;

@@ -18,15 +18,15 @@
  */
 import { Refusal } from '@timeweft/contract';
 import type {
-  Briefing, BriefingSection, EntryRecord, FactRecord, Id, JourneyLegRecord, RulingRecord, RunSnapshot, SceneRecord,
+  Briefing, BriefingSection, EntryRecord, FactRecord, Id, JourneyLegRecord, RulingRecord, RunSnapshot, SceneRecord, ThreadRecord,
 } from '@timeweft/contract';
 import { resolveEntryInIndex } from './readers.ts';
 import {
-  compareText, entryNameOf, holdingFactsOf, indexRun, newestStandingScene, rulingsInForce, sceneNumberOf, servableThreads,
+  compareText, entryNameOf, holdingFactsOf, indexRun, lastTouchedSceneNumberOf, mainCharacterInIndex, newestStandingScene, trailCountOf, openThreadsNewestFirst, rulingsInForce, sceneNumberOf,
   trailNewestFirstOf, wasEstablishedInAStruckScene,
 } from './run-index.ts';
 import type { RunIndex } from './run-index.ts';
-import { CUT_MARKER, SMALLEST_USEFUL_CUT_BYTES, byteLengthOf, cutToFit, onOneLine } from './text-fitting.ts';
+import { CUT_MARKER, SMALLEST_USEFUL_CUT_BYTES, byteLengthOf, cutToFit, onOneLine, openingAndEndingOf } from './text-fitting.ts';
 
 export interface BriefingRequest {
   /** Names the next scene is likely to involve. */
@@ -53,12 +53,21 @@ const NEWEST_SCENES_ALWAYS_FIRST = 3;
 const LONGEST_FACT_LINE_BYTES = 600;
 
 /**
+ * The most one open thread's own text takes in a briefing. A thread kept by hand for a long while
+ * can run to many thousands of bytes, and whole it would leave room for no other thread. Past
+ * this it is shown by its opening and its ending, and list_threads gives it whole.
+ */
+export const LONGEST_THREAD_TEXT_BYTES = 450;
+
+/**
  * The sections, their share of the room, and for the first three the least they are given. The
  * journeys' small share was taken from the last scenes, which list_scenes serves in full anyway.
  * The rulings hold about a fifth of the budget, taken from the page and the last scenes, because the
  * author's standing instructions about how a run is told were being left out of long runs.
+ * The open threads hold about an eighth, taken from the run's own section, which rarely fills its
+ * share: on a long run six hundredths showed two threads of a hundred and forty.
  */
-const SECTION_SHARES = [0.2, 0.07, 0.2, 0.05, 0.15, 0.2, 0.06, 0.03, 0.04] as const;
+const SECTION_SHARES = [0.14, 0.07, 0.2, 0.05, 0.15, 0.2, 0.12, 0.03, 0.04] as const;
 /** Stands in the back pass's order for the first item of each section that takes room for it. */
 const FIRST_ITEM_OF_A_SECTION_THAT_TAKES_ROOM = -1;
 /**
@@ -493,14 +502,11 @@ function entriesAboutNow(index: RunIndex): EntryRecord[] {
     for (const note of index.snapshot.notes) if (note.sceneId === scene.id) present.add(note.entryId);
     for (const entryId of present) presence.set(entryId, (presence.get(entryId) ?? 0) + weight);
   });
-  const trailCountOf = (entryId: Id): number => index.servableNotesByEntry.get(entryId)?.length ?? 0;
   const byWeight = (left: EntryRecord, right: EntryRecord): number =>
     (presence.get(right.id) ?? 0) - (presence.get(left.id) ?? 0)
-    || trailCountOf(right.id) - trailCountOf(left.id)
+    || trailCountOf(index, right.id) - trailCountOf(index, left.id)
     || compareText(left.name, right.name) || compareText(left.id, right.id);
-  const mostTrailed = [...index.snapshot.entries]
-    .filter((entry) => trailCountOf(entry.id) > 0)
-    .sort((left, right) => trailCountOf(right.id) - trailCountOf(left.id) || compareText(left.name, right.name) || compareText(left.id, right.id))[0];
+  const mostTrailed = mainCharacterInIndex(index);
   const present = index.snapshot.entries
     .filter((entry) => (presence.get(entry.id) ?? 0) > 0 && entry.id !== mostTrailed?.id)
     .sort(byWeight);
@@ -512,6 +518,30 @@ function sinceWhen(index: RunIndex, fact: FactRecord): string {
   if (fact.fromSceneId === null) return 'from the start';
   const number = sceneNumberOf(index, fact.fromSceneId);
   return number === null ? 'since a scene not in the run' : `since scene ${number}`;
+}
+
+/**
+ * Properties that say where an entry was last met. A trail note is written each time the entry is
+ * on the page, so where such a fact is older than the entry's newest trail note, the trail has gone
+ * on without it and the fact can no longer be read as where the entry is now.
+ */
+export const PROPERTIES_THE_TRAIL_OVERTAKES: readonly string[] = ['last seen'];
+
+function foldedProperty(property: string): string {
+  return onOneLine(property).toLowerCase().replace(/[-_:]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * The scene of the entry's newest trail note, where a holding fact about where it was last met is
+ * older than that note, or null where the fact is not overtaken. The fact is never changed or
+ * dropped: it is the newest value written down, and the briefing only says the trail goes on.
+ */
+function sceneTheTrailOvertakesItAt(index: RunIndex, fact: FactRecord, newestTrailScene: number | null): number | null {
+  if (newestTrailScene === null) return null;
+  if (!PROPERTIES_THE_TRAIL_OVERTAKES.includes(foldedProperty(fact.property))) return null;
+  const factScene = fact.fromSceneId === null ? 0 : sceneNumberOf(index, fact.fromSceneId);
+  if (factScene === null) return null;
+  return newestTrailScene > factScene ? newestTrailScene : null;
 }
 
 /** An entry's holding facts, newest first, so what was established lately leads. */
@@ -545,13 +575,27 @@ function onThePageNextSection(index: RunIndex, names: UpcomingName[], servedWhol
     const otherNames = entry.alsoKnownAs.length > 0 ? `, also ${entry.alsoKnownAs.map(onOneLine).join(', ')}` : '';
     const headingIndex = pieces.length;
     const trail = trailNewestFirstOf(index, entry.id).slice(0, TRAIL_NOTES_PER_ENTRY);
-    const holding = holdingFactsNewestFirst(index, entry.id);
+    const newestTrailScene = trail[0] ? sceneNumberOf(index, trail[0].sceneId) : null;
+    const holdingNewestFirst = holdingFactsNewestFirst(index, entry.id);
+    const overtakenAt = new Map<Id, number>();
+    for (const fact of holdingNewestFirst) {
+      const sceneNumber = sceneTheTrailOvertakesItAt(index, fact, newestTrailScene);
+      if (sceneNumber !== null) overtakenAt.set(fact.id, sceneNumber);
+    }
+    // A fact the trail has overtaken is ranked after the trail, so the newest note is served first
+    // and the fact never stands alone as where the entry is now.
+    const freshFacts = holdingNewestFirst.filter((fact) => !overtakenAt.has(fact.id));
+    const overtakenFacts = holdingNewestFirst.filter((fact) => overtakenAt.has(fact.id));
+    const factsAheadOfTheTrail = Math.min(FACTS_BEFORE_THE_TRAIL, freshFacts.length);
+    const holding = [...freshFacts.slice(0, factsAheadOfTheTrail), ...overtakenFacts, ...freshFacts.slice(factsAheadOfTheTrail)];
     const factPiece = (factIndex: number): Piece | null => {
       const fact = holding[factIndex];
       if (!fact) return null;
       const pointedAt = fact.aboutEntryId === null ? '' : ` (${entryNameOf(index, fact.aboutEntryId) ?? 'an entry not served here'})`;
+      const overtaken = overtakenAt.get(fact.id);
+      const trailGoesOn = overtaken === undefined ? '' : `; its trail goes on to scene ${overtaken}`;
       // The age is in the label, so that a value cut short still says since when it held.
-      const label = `- ${onOneLine(fact.property)} (${sinceWhen(index, fact)}): `;
+      const label = `- ${onOneLine(fact.property)} (${sinceWhen(index, fact)}${trailGoesOn}): `;
       const line = capped(label, `${onOneLine(fact.value)}${pointedAt}`, LONGEST_FACT_LINE_BYTES);
       return makePiece(label, line.body, { priority: 0, position: blockStart + 1 + factIndex, alreadyCut: line.cut });
     };
@@ -570,9 +614,8 @@ function onThePageNextSection(index: RunIndex, names: UpcomingName[], servedWhol
     };
     if (!servedWhole) {
       add(makePiece(`### ${onOneLine(entry.name)} (${entry.kind}${pronoun})`, otherNames, { priority: 0, position: blockStart }), interleavedPriority(0, nameIndex), null);
-      const factsAheadOfTheTrail = Math.min(FACTS_BEFORE_THE_TRAIL, holding.length);
       holding.forEach((_, factIndex) => {
-        const step = factIndex < FACTS_BEFORE_THE_TRAIL ? 1 + factIndex : 1 + factIndex + trail.length;
+        const step = factIndex < factsAheadOfTheTrail ? 1 + factIndex : 1 + factIndex + trail.length;
         add(factPiece(factIndex), interleavedPriority(step, nameIndex), headingIndex);
       });
       trail.forEach((_, noteIndex) => add(trailPiece(noteIndex), interleavedPriority(1 + factsAheadOfTheTrail + noteIndex, nameIndex), headingIndex));
@@ -672,20 +715,47 @@ function rulingsSection(index: RunIndex, upcomingEntryIds: ReadonlySet<Id>): Sec
   };
 }
 
+/**
+ * The open threads, ranked so a fresh chat meets what matters first: the threads about an entry on
+ * the page next lead, then the rest. Within each group the thread a scene moved last comes first:
+ * by the scene it was last touched in (opened, touched or closed), the newest first; then by the
+ * scene it was opened in, the newest first; then the latest written first; never by id
+ * (threadsLastTouchedFirst says it in full). A hand-kept run keeps a thread alive by touching it,
+ * so a thread opened long ago and still moving ranks by its latest move, not by its opening. A
+ * line says "last touched scene N" beside its id where that is not the scene it opened in, so a
+ * cut keeps it, and ends on what moved there where the touch said.
+ */
 function threadsSection(index: RunIndex, upcomingEntryIds: ReadonlySet<Id>): SectionPlan {
-  const openNewestFirst = servableThreads(index).filter((thread) => thread.closedInSceneId === null).reverse();
+  const openNewestFirst = openThreadsNewestFirst(index);
   const touching = openNewestFirst.filter((thread) => thread.aboutEntryIds.some((entryId) => upcomingEntryIds.has(entryId)));
   const others = openNewestFirst.filter((thread) => !thread.aboutEntryIds.some((entryId) => upcomingEntryIds.has(entryId)));
   const pieces = [...touching, ...others].map((thread, threadIndex) => {
     const about = aboutNames(index, thread.aboutEntryIds);
-    // The id leads, so that a line cut short still carries what a save needs to close it.
-    return makePiece(`- Thread ${thread.id}: `, `${onOneLine(thread.text)}${about.length > 0 ? ` (about ${about})` : ''}`, { priority: threadIndex });
+    const lastTouched = lastTouchOf(index, thread);
+    const details = [about.length > 0 ? `about ${about}` : '', lastTouched === null || lastTouched.note === '' ? '' : `latest: ${lastTouched.note}`]
+      .filter((part) => part !== '').join('; ');
+    // The id leads, so that a line cut short still carries what a save needs to touch or close it,
+    // and when it was last touched comes with it, since a long thread is cut before its end.
+    const head = lastTouched === null ? `- Thread ${thread.id}: ` : `- Thread ${thread.id} (last touched scene ${lastTouched.sceneNumber}): `;
+    return makePiece(head, `${openingAndEndingOf(onOneLine(thread.text), LONGEST_THREAD_TEXT_BYTES)}${details.length > 0 ? ` (${details})` : ''}`, { priority: threadIndex });
   });
   if (pieces.length === 0) pieces.push(makePiece('', 'None.', { priority: 0, isItem: false }));
   return {
     name: 'Open threads', heading: '## Open threads\n', pieces, alwaysPresent: false,
     fetchWith: 'list_threads fetches every open thread.',
   };
+}
+
+/**
+ * The scene a thread was last touched in, and what moved there where that touch carried a note.
+ * Null where it was last touched in the scene it opened in, or in no known scene: then there is
+ * nothing more to say than its opening.
+ */
+function lastTouchOf(index: RunIndex, thread: ThreadRecord): { sceneNumber: number; note: string } | null {
+  const sceneNumber = lastTouchedSceneNumberOf(index, thread);
+  if (sceneNumber === null || sceneNumber === sceneNumberOf(index, thread.openedInSceneId)) return null;
+  const touch = thread.touches.find((candidate) => sceneNumberOf(index, candidate.sceneId) === sceneNumber);
+  return { sceneNumber, note: touch === undefined ? '' : onOneLine(touch.note) };
 }
 
 /** The names asked for, and every other name each answers to, folded for a case-blind match. */

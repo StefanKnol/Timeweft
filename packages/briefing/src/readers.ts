@@ -13,7 +13,7 @@ import type {
 } from '@timeweft/contract';
 import {
   closedFactsOf, compareText, entryNameOf, holdingFactsOf, indexRun, rulingsInForce, sceneNumberOf,
-  servableThreads, trailNewestFirstOf, wasEstablishedInAStruckScene,
+  servableThreads, threadsLastTouchedFirst, trailNewestFirstOf, wasEstablishedInAStruckScene,
 } from './run-index.ts';
 import type { RunIndex } from './run-index.ts';
 import { onOneLine } from './text-fitting.ts';
@@ -64,6 +64,21 @@ function threadTouches(thread: ThreadRecord, entryIds: ReadonlySet<Id>): boolean
 export function lookUpInIndex(index: RunIndex, name: string, options: { withHistory: boolean; trail: number }): EntryLookup {
   const entry = resolveEntryInIndex(index, name);
   if (!entry) throw new Refusal(`Nothing in this run is called "${name.trim()}". It would be new.`);
+  return lookUpOneEntry(index, entry, options);
+}
+
+/**
+ * What look_up answers for one entry, found by its id rather than by a name, since two entries
+ * may share a name. Null where the snapshot holds no entry with that id, which is also the answer
+ * for an entry the snapshot's audience may not see.
+ */
+export function lookUpEntryById(snapshot: RunSnapshot, entryId: Id, options: { withHistory: boolean; trail: number }): EntryLookup | null {
+  const index = indexRun(snapshot);
+  const entry = index.entryById.get(entryId);
+  return entry === undefined ? null : lookUpOneEntry(index, entry, options);
+}
+
+function lookUpOneEntry(index: RunIndex, entry: EntryRecord, options: { withHistory: boolean; trail: number }): EntryLookup {
   const trailWanted = Math.max(0, Math.floor(options.trail));
   const wholeTrail = trailNewestFirstOf(index, entry.id);
   const shownTrail = wholeTrail.slice(0, trailWanted);
@@ -198,14 +213,18 @@ export function rulingsBearingOn(snapshot: RunSnapshot, filter: { topic?: string
 }
 
 /**
- * Threads in the order they were opened: open ones only unless closed are asked for, and only
- * those touching the given entries where any are given.
+ * Threads in the order a briefing ranks them: the one a scene moved last first, by the scene it was
+ * last touched in, then the scene it opened in, then the latest written (threadsLastTouchedFirst).
+ * Open ones only unless closed are asked for, and then every open one comes before every closed
+ * one; only those about the given entries where any are given.
  */
 export function threadsOpenFor(snapshot: RunSnapshot, filter: { aboutEntryIds: Id[]; includeClosed: boolean }): ThreadRecord[] {
+  const index = indexRun(snapshot);
   const about = new Set(filter.aboutEntryIds);
-  return servableThreads(indexRun(snapshot)).filter((thread) =>
-    (filter.includeClosed || thread.closedInSceneId === null)
-    && (about.size === 0 || threadTouches(thread, about)));
+  const wanted = servableThreads(index).filter((thread) => about.size === 0 || threadTouches(thread, about));
+  const open = threadsLastTouchedFirst(index, wanted.filter((thread) => thread.closedInSceneId === null));
+  if (!filter.includeClosed) return open;
+  return [...open, ...threadsLastTouchedFirst(index, wanted.filter((thread) => thread.closedInSceneId !== null))];
 }
 
 /** One standing scene in full, with everything it established. Refuses a number with no standing scene. */
@@ -230,6 +249,8 @@ export function sceneInFull(snapshot: RunSnapshot, number: number): SceneInFull 
     rulings: snapshot.rulings.filter((ruling) => ruling.sceneId === scene.id).sort((left, right) => left.number - right.number || byCreation(left, right)),
     threadsOpened: snapshot.threads.filter((thread) => thread.openedInSceneId === scene.id).sort(byCreation),
     threadsClosed: snapshot.threads.filter((thread) => thread.closedInSceneId === scene.id).sort(byCreation),
+    threadsTouched: snapshot.threads.filter((thread) => thread.closedInSceneId !== scene.id
+      && thread.touches.some((touch) => touch.sceneId === scene.id)).sort(byCreation),
     legs: snapshot.legs.filter((leg) => leg.sceneId === scene.id).sort(byCreation),
   };
 }

@@ -46,7 +46,10 @@ function ruling(id: string, number: number, text: string, topics: string[], scen
 }
 
 function thread(id: string, text: string, openedInSceneId: string | null, closedInSceneId: string | null, createdAt: string): ThreadRecord {
-  return { id, runId: 'run', text, aboutEntryIds: [], openedInSceneId, closedInSceneId, resolution: closedInSceneId ? 'It was settled.' : '', createdAt };
+  return {
+    id, runId: 'run', text, aboutEntryIds: [], openedInSceneId, closedInSceneId, resolution: closedInSceneId ? 'It was settled.' : '',
+    touches: [], lastTouchedInSceneId: closedInSceneId ?? openedInSceneId, createdAt,
+  };
 }
 
 function demoSnapshot(): RunSnapshot {
@@ -182,6 +185,18 @@ test('what a scene established is read out of the run by the scene id', () => {
   assert.deepEqual(third.threadsClosed.map((thread) => thread.id), ['t-closed']);
 });
 
+test('a scene says the threads it touched with what moved, as read_scene does, and not one it closed', () => {
+  const snapshot = demoSnapshot();
+  snapshot.threads = snapshot.threads.map((each) => {
+    if (each.id === 't-early') return { ...each, touches: [{ sceneId: 's2', note: 'Half paid in bread.' }, { sceneId: 's3', note: '' }], lastTouchedInSceneId: 's3' };
+    if (each.id === 't-closed') return { ...each, touches: [{ sceneId: 's3', note: 'Paid at last.' }] };
+    return each;
+  });
+  assert.deepEqual(whatASceneEstablished('s2', snapshot).threadsTouched.map((item) => [item.thread.id, item.note]), [['t-early', 'Half paid in bread.']]);
+  assert.deepEqual(whatASceneEstablished('s3', snapshot).threadsTouched.map((item) => [item.thread.id, item.note]), [['t-early', '']]);
+  assert.deepEqual(whatASceneEstablished('s1', snapshot).threadsTouched, []);
+});
+
 test('a scene establishes the journeys first travelled in it, and a struck take keeps its own', () => {
   assert.deepEqual(whatASceneEstablished('s2', demoSnapshot()).legs.map((leg) => leg.id), ['leg-early']);
   assert.deepEqual(whatASceneEstablished('s2-old', demoSnapshot()).legs.map((leg) => leg.id), ['leg-struck']);
@@ -222,12 +237,51 @@ test('rulings are by number, and a filter keeps those holding every word in text
   assert.deepEqual(rulingsMatching(rulings, 'tolls narration').map((ruling) => ruling.number), []);
 });
 
-test('threads: open first in the order they opened, closed after', () => {
+test('threads: open first, the one opened in the later scene first, closed after', () => {
   const snapshot = demoSnapshot();
   const { open, closed } = threadsOpenFirst(snapshot.threads, snapshot.scenes);
-  assert.deepEqual(open.map((item) => item.thread.id), ['t-early', 't-later']);
+  assert.deepEqual(open.map((item) => item.thread.id), ['t-later', 't-early']);
   assert.deepEqual(closed.map((item) => item.thread.id), ['t-closed']);
   assert.equal(closed[0]?.closedInSceneNumber, 3);
+});
+
+test('threads: one opened early and touched in a later scene ranks by its touch, with what moved', () => {
+  const snapshot = demoSnapshot();
+  snapshot.threads = snapshot.threads.map((each) => (each.id === 't-early'
+    ? { ...each, touches: [{ sceneId: 's3', note: 'The ferry was seen at the ford.' }], lastTouchedInSceneId: 's3' }
+    : each));
+  const { open } = threadsOpenFirst(snapshot.threads, snapshot.scenes);
+  assert.deepEqual(open.map((item) => item.thread.id), ['t-early', 't-later']);
+  assert.equal(open[0]?.lastTouchedInSceneNumber, 3);
+  assert.equal(open[0]?.lastTouchNote, 'The ferry was seen at the ford.');
+});
+
+test('threads: of two last touched in one scene, the one opened in the newer scene first, as the briefing ranks them', () => {
+  const snapshot = demoSnapshot();
+  snapshot.threads = [
+    thread('opened-in-three', 'Who left bread on the weir?', 's3', null, '2026-01-01T00:01:00Z'),
+    { ...thread('opened-in-one', 'Who owes the miller?', 's1', null, '2026-01-01T00:01:00Z'), touches: [{ sceneId: 's3', note: 'Asked at the weir.' }], lastTouchedInSceneId: 's3' },
+  ];
+  assert.deepEqual(threadsOpenFirst(snapshot.threads, snapshot.scenes).open.map((item) => item.thread.id), ['opened-in-three', 'opened-in-one']);
+});
+
+test('threads: of two alike in their scenes, the later written first, as list_threads and the briefing put them', () => {
+  const snapshot = demoSnapshot();
+  snapshot.threads = [
+    thread('written-first', 'Who mends the nets?', 's2', null, '2026-01-01T00:01:00Z'),
+    thread('written-second', 'Who feeds the geese?', 's2', null, '2026-01-01T00:01:00Z'),
+  ];
+  assert.deepEqual(threadsOpenFirst(snapshot.threads, snapshot.scenes).open.map((item) => item.thread.id), ['written-second', 'written-first']);
+});
+
+test('threads: one with no known scene ranks after one opened in a scene numbered 0', () => {
+  const snapshot = demoSnapshot();
+  snapshot.scenes.push(scene('s0', 0, 'standing', '2026-01-01T00:00:00Z'));
+  snapshot.threads = [
+    thread('opened-in-the-prologue', 'Who built the mill?', 's0', null, '2026-01-01T00:01:00Z'),
+    thread('undated', 'Who owns the pond?', null, null, '2026-01-01T00:01:00Z'),
+  ];
+  assert.deepEqual(threadsOpenFirst(snapshot.threads, snapshot.scenes).open.map((item) => item.thread.id), ['opened-in-the-prologue', 'undated']);
 });
 
 test('a collision is drawn with the author fact and the story side, waiting ones first', () => {
