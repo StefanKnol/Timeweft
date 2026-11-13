@@ -127,6 +127,15 @@ test('every operation runs end to end', async () => {
   assert.equal(whole.scenes.filter((scene) => scene.status === 'struck').length, 1, 'the author sees the struck take');
   assert.equal(whole.collisions.length, 1);
 
+  const imported = await answerOf('import_run', {
+    slug: 'the-weir-mill', title: 'The Weir Mill',
+    files: { log: '# The Weir Mill - Log\n\n## Scene 1: The wheel\n**When:** the first morning\nThe miller turns the wheel.\n' },
+  });
+  ran.add('import_run');
+  assert.equal(imported.run.slug, 'the-weir-mill');
+  assert.equal(imported.counts.scenes, 1);
+  assert.ok(Array.isArray(imported.unplaced));
+
   assert.deepEqual([...ran].sort(), [...OPERATION_NAMES].sort(), 'some operation was not run end to end');
 });
 

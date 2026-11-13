@@ -163,6 +163,20 @@ describe('sceneInFull', () => {
     assert.deepEqual(full.legs.map((item) => item.id), ['leg-ford-mill'], 'the journeys first travelled in it');
   });
 
+  it('keeps what one save wrote at one moment in the order it was written, never in the order of the ids', () => {
+    // An id is random, so two stores given the same scene would answer in two orders if a tie on
+    // the moment were broken by it. Here the ids sort the opposite way from the written order.
+    const run = millerRun();
+    const mill = run.entries.find((entry) => entry.id === 'entry-mill');
+    assert.ok(mill);
+    run.entries.push(
+      { ...mill, id: 'zz-written-first', name: 'the weir' },
+      { ...mill, id: 'aa-written-second', name: 'the baker' },
+    );
+    const full = sceneInFull(run, 3);
+    assert.deepEqual(full.entriesIntroduced.map((entry) => entry.name).slice(-2), ['the weir', 'the baker']);
+  });
+
   it('answers the standing take where a struck take shares the number', () => {
     const full = sceneInFull(millerRun(), 2);
     assert.equal(full.scene.id, 'scene-2');

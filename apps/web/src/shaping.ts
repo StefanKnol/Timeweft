@@ -5,10 +5,10 @@
  * browser, is what lets `node --test` hold it: a rule about which fact holds or which take is
  * struck is tested once, not looked at in a screenshot.
  */
-import { ENTRY_KINDS, OPERATION_ROUTE_PREFIX } from '@timeweft/contract';
+import { ENTRY_KINDS, OPERATION_ROUTE_PREFIX, OPERATIONS } from '@timeweft/contract';
 import type {
   ClockReading, ClockRecord, CollisionRecord, EntryKind, EntryNoteRecord, EntryRecord, FactRecord,
-  Id, JourneyLegRecord, RulingRecord, RunSnapshot, SceneRecord, ThreadRecord, Visibility, WaypointRecord, WireAnswer,
+  Id, ImportedRunReport, JourneyLegRecord, RequestOf, RulingRecord, RunSnapshot, RunStatus, SceneRecord, ThreadRecord, Visibility, WaypointRecord, WireAnswer,
 } from '@timeweft/contract';
 
 // ---------------------------------------------------------------------------------------------
@@ -454,6 +454,9 @@ export function outcomeOfResponse<Answer>(status: number, bodyText: string): Cal
     return { kind: 'fault', fault: `The server answered ${status} and said it succeeded.` };
   }
   if (status === 400) return { kind: 'refusal', refusal: wire.refusal };
+  // A body too large is refused before the operation runs, and the server's sentence names the
+  // route's limit, which is what the author needs rather than a fault with a status in it.
+  if (status === 413) return { kind: 'refusal', refusal: wire.refusal };
   return { kind: 'fault', fault: `The server answered ${status}: ${wire.refusal}` };
 }
 
@@ -488,4 +491,235 @@ function safelyDecoded(part: string): string {
   } catch {
     return part;
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Importing a run kept by hand
+
+/** The five files a story kept by hand, in the order the import form lists them. */
+export const IMPORT_PARTS = ['log', 'state', 'cast', 'items', 'places'] as const;
+export type ImportPart = (typeof IMPORT_PARTS)[number];
+
+/**
+ * The largest body the server takes for `import_run`: the figure of
+ * `LARGEST_BODY_BYTES_BY_OPERATION.import_run` in apps/server/src/http-server.ts, which the
+ * contract does not hold. A server test reads this file and fails if the two figures part.
+ */
+export const LARGEST_IMPORT_BODY_BYTES = 24 * 1024 * 1024;
+
+/** A picked file as the matching needs it. The browser's `File` has both. */
+export interface FileToMatch {
+  name: string;
+  size: number;
+}
+
+export interface FilesMatchedToParts<FilePicked extends FileToMatch> {
+  /** The one file matched to each part, or null where none was given. */
+  byPart: Record<ImportPart, FilePicked | null>;
+  /** Files that match no part, kept so the page can say they will not be read. */
+  notUsed: FilePicked[];
+  /** One sentence per part that more than one file matched, naming every one of them. */
+  refusals: string[];
+}
+
+/**
+ * The part a file name is for, case-blind, or null. A name is the part's own (`log.md`) or ends
+ * with it after something that is not a letter or a digit (`the-run-log.md`, `9e21-state.md`),
+ * since a downloaded file often carries a prefix. The boundary is what keeps `catalog.md` and
+ * `estate.md` from being read as a log and a state.
+ */
+export function partOfFileName(fileName: string): ImportPart | null {
+  const lowered = fileName.trim().toLowerCase();
+  for (const part of IMPORT_PARTS) {
+    const ending = `${part}.md`;
+    if (lowered === ending) return part;
+    if (lowered.endsWith(ending) && !/[a-z0-9]/.test(lowered.charAt(lowered.length - ending.length - 1))) return part;
+  }
+  return null;
+}
+
+/** Each picked file matched to its part by name; two for one part is refused rather than guessed. */
+export function matchFilesToParts<FilePicked extends FileToMatch>(files: readonly FilePicked[]): FilesMatchedToParts<FilePicked> {
+  const candidatesByPart = new Map<ImportPart, FilePicked[]>(IMPORT_PARTS.map((part) => [part, []]));
+  const notUsed: FilePicked[] = [];
+  for (const file of files) {
+    const part = partOfFileName(file.name);
+    if (part === null) notUsed.push(file);
+    else candidatesByPart.get(part)?.push(file);
+  }
+  const byPart = Object.fromEntries(IMPORT_PARTS.map((part) => [part, null])) as Record<ImportPart, FilePicked | null>;
+  const refusals: string[] = [];
+  for (const part of IMPORT_PARTS) {
+    const candidates = candidatesByPart.get(part) ?? [];
+    if (candidates.length === 1) byPart[part] = candidates[0] ?? null;
+    if (candidates.length > 1) {
+      const everyOne = candidates.length === 2 ? 'both' : 'all';
+      refusals.push(`${namesInWords(candidates.map((file) => `"${file.name}"`))} are ${everyOne} read as ${part}.md. Pick only one of them.`);
+    }
+  }
+  return { byPart, notUsed, refusals };
+}
+
+function namesInWords(names: string[]): string {
+  if (names.length <= 2) return names.join(' and ');
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/** How many parts have a file. */
+export function partsMatchedCount(matched: FilesMatchedToParts<FileToMatch>): number {
+  return IMPORT_PARTS.filter((part) => matched.byPart[part] !== null).length;
+}
+
+/**
+ * The title line of a log file, as the server's reader takes it: the first top heading, unless it
+ * names a movement, with a trailing "- log" taken off. Null where there is none.
+ */
+export function titleFromLogText(logText: string): string | null {
+  for (const line of logText.split(/\r?\n/)) {
+    const heading = /^#\s+(.*)$/.exec(line);
+    if (heading === null) continue;
+    const headingText = (heading[1] ?? '').trim();
+    if (/^(movement|act|part|book)\b/i.test(headingText) && !/\s[-–]\s*log$/i.test(headingText)) return null;
+    const title = headingText.replace(/\s*[-–]\s*log$/i, '').trim();
+    return title === '' ? null : title;
+  }
+  return null;
+}
+
+/** The longest slug offered from a title. A slug is a handle, not the title written again. */
+export const LONGEST_OFFERED_SLUG = 60;
+
+/**
+ * A slug made from a title: lower case, accents taken off, every run of anything else a hyphen,
+ * cut at a hyphen near sixty characters. An empty string where the title has no letter or digit.
+ */
+export function slugFromTitle(title: string): string {
+  const plain = title.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const slug = plain.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (slug.length <= LONGEST_OFFERED_SLUG) return slug;
+  const cut = slug.slice(0, LONGEST_OFFERED_SLUG);
+  const lastHyphen = cut.lastIndexOf('-');
+  return (lastHyphen > 0 ? cut.slice(0, lastHyphen) : cut).replace(/-+$/g, '');
+}
+
+/** The slug the box shows: what the author typed once they have typed, else the one offered. */
+export function slugShown(typedSlug: string, authorTyped: boolean, titleOfLog: string | null): string {
+  if (authorTyped) return typedSlug;
+  return titleOfLog === null ? '' : slugFromTitle(titleOfLog);
+}
+
+/**
+ * Why a slug is not well formed, or null where it is. The rule is the contract's own pattern,
+ * asked of the operation's schema so the page cannot drift from what the server takes.
+ */
+export function whySlugIsNotWellFormed(slug: string): string | null {
+  if (slug === '') return 'Give the run a slug.';
+  if (OPERATIONS.import_run.input.shape.slug.safeParse(slug).success) return null;
+  return 'A slug is lower case letters and digits, in words joined by single hyphens, with no hyphen at either end.';
+}
+
+/** A size in megabytes as a person reads it, for the size refusal. */
+export function megabytesInWords(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Why the files together are too large to send, or null where they may fit, asked before they
+ * are read. What is sent is never smaller than the files, since JSON only adds to text, so files
+ * over the limit can never fit; files under it may still not, which `importToSend` says.
+ */
+export function whyFilesAreTooLarge(sizes: readonly number[]): string | null {
+  const totalBytes = sizes.reduce((sum, size) => sum + size, 0);
+  if (totalBytes <= LARGEST_IMPORT_BODY_BYTES) return null;
+  return `The files come to ${megabytesInWords(totalBytes)} together, and an import takes at most ${megabytesInWords(LARGEST_IMPORT_BODY_BYTES)}.`;
+}
+
+/**
+ * Why the Import button cannot be pressed yet, or null where it can. The first reason that holds
+ * is the one given, so the author fixes one thing at a time.
+ */
+export function whyImportCannotStart(matched: FilesMatchedToParts<FileToMatch>, slug: string): string | null {
+  if (matched.refusals.length > 0) return matched.refusals[0] ?? null;
+  if (partsMatchedCount(matched) === 0) return 'Pick at least one of the five files.';
+  const sizes = IMPORT_PARTS.flatMap((part) => {
+    const file = matched.byPart[part];
+    return file === null ? [] : [file.size];
+  });
+  const tooLarge = whyFilesAreTooLarge(sizes);
+  if (tooLarge !== null) return tooLarge;
+  return whySlugIsNotWellFormed(slug);
+}
+
+export interface ImportForm {
+  slug: string;
+  title: string;
+  setting: string;
+  status: RunStatus;
+}
+
+/**
+ * The `import_run` input from the form and the text of each file read. A part with no file goes
+ * as an empty text, which is how the contract says "not kept"; a title or setting left blank is
+ * left out, so the server reads the title from the files' own heading.
+ */
+export function importRunInput(form: ImportForm, textByPart: Partial<Record<ImportPart, string>>): RequestOf<'import_run'> {
+  const title = form.title.trim();
+  const setting = form.setting.trim();
+  return {
+    slug: form.slug,
+    ...(title === '' ? {} : { title }),
+    ...(setting === '' ? {} : { setting }),
+    status: form.status,
+    files: Object.fromEntries(IMPORT_PARTS.map((part) => [part, textByPart[part] ?? ''])) as Record<ImportPart, string>,
+  };
+}
+
+/** The size of a request body as it travels: its JSON, escaping counted, in UTF-8 bytes. */
+export function bodyBytesOf(input: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(input)).length;
+}
+
+/**
+ * The input to send, or why it cannot be sent: the body is measured as it will travel, since
+ * JSON escaping can more than double a text (a quote or a line break becomes two characters),
+ * and is held to the server's limit so an import the page starts never meets a 413.
+ */
+export function importToSend(
+  form: ImportForm,
+  textByPart: Partial<Record<ImportPart, string>>,
+): { ok: true; input: RequestOf<'import_run'> } | { ok: false; reason: string } {
+  const input = importRunInput(form, textByPart);
+  const bodyBytes = bodyBytesOf(input);
+  if (bodyBytes <= LARGEST_IMPORT_BODY_BYTES) return { ok: true, input };
+  return {
+    ok: false,
+    reason: `The import comes to ${megabytesInWords(bodyBytes)} as it would be sent, and the server takes at most ${megabytesInWords(LARGEST_IMPORT_BODY_BYTES)}. Nothing was sent.`,
+  };
+}
+
+/** Every count an import answers with, in words, in a fixed order. */
+const IMPORT_COUNT_LABELS: Record<keyof ImportedRunReport['counts'], string> = {
+  scenes: 'Scenes',
+  entries: 'Entries',
+  facts: 'Facts',
+  trailNotes: 'Trail notes',
+  rulings: 'Rulings',
+  threads: 'Threads',
+  waypoints: 'Waypoints',
+  journeyLegs: 'Journey legs',
+  clocks: 'Clocks',
+};
+
+export function importCountsInWords(counts: ImportedRunReport['counts']): Array<{ label: string; count: number }> {
+  return (Object.keys(IMPORT_COUNT_LABELS) as Array<keyof ImportedRunReport['counts']>).map((key) => ({
+    label: IMPORT_COUNT_LABELS[key],
+    count: counts[key],
+  }));
+}
+
+/** The sentence for the lines the reader could not place, singular where there is one. */
+export function unplacedInWords(unplacedCount: number): string {
+  if (unplacedCount === 0) return 'Every line was placed.';
+  if (unplacedCount === 1) return '1 line could not be placed.';
+  return `${unplacedCount.toLocaleString('en')} lines could not be placed.`;
 }

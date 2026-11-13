@@ -15,6 +15,7 @@ import {
   threadsOpenFor,
 } from '@timeweft/briefing';
 import type { ZodError } from 'zod';
+import { importWeaverFiles, type ImportOptions } from './import-a-run.ts';
 
 type Handler<Name extends OperationName> = (store: Store, input: InputOf<Name>) => Promise<AnswerByOperation[Name]>;
 
@@ -79,6 +80,15 @@ export const OPERATION_HANDLERS: { [Name in OperationName]: Handler<Name> } = {
   },
   settle_collision: (store, input) => store.settleCollision(input),
   read_run: (store, input) => snapshotForOperation(store, 'read_run', input.run),
+  // The author is the only caller and the files are their own, so a refusal from the store, which
+  // quotes them, goes back to them as it is.
+  import_run: (store, input) => {
+    const options: ImportOptions = { slug: input.slug };
+    if (input.title !== undefined) options.title = input.title;
+    if (input.setting !== undefined) options.setting = input.setting;
+    if (input.status !== undefined) options.status = input.status;
+    return importWeaverFiles(store, input.files, options);
+  },
 };
 
 export function isOperationName(text: string): text is OperationName {

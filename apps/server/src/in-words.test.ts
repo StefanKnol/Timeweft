@@ -4,8 +4,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { OPERATIONS, Refusal, type SavedScene, type SceneInFull, type Store } from '@timeweft/contract';
-import { runListingsInWords, savedSceneInWords, sceneInFullInWords, type NamesInTheRun } from './in-words.ts';
+import { OPERATIONS, Refusal, type RunRecord, type SavedScene, type SceneInFull, type Store } from '@timeweft/contract';
+import { importedRunInWords, runListingsInWords, savedSceneInWords, sceneInFullInWords, type NamesInTheRun } from './in-words.ts';
 import { runOperation } from './operations.ts';
 
 const SCENE_ID = '00000000-0000-4000-8000-000000000001';
@@ -78,4 +78,13 @@ test('a scene read in full says the journeys first travelled in it', () => {
   };
   const text = sceneInFullInWords(inFull, names);
   assert.match(text, /Journeys:\n- From the ford to the mill: half a morning \(on foot, carrying flour\)\n- From the mill to the market: an hour$/m);
+});
+
+test('an import says its counts and every unplaced line, or that every line was placed', () => {
+  const run: RunRecord = { id: 'r', slug: 'the-weir', title: 'The Weir', setting: '', status: 'binding', continuesRunId: null, register: '', createdAt: '2026-01-01' };
+  const counts = { scenes: 2, entries: 1, facts: 3, trailNotes: 1, rulings: 0, threads: 1, waypoints: 0, journeyLegs: 0, clocks: 1 };
+  const said = importedRunInWords({ run, counts, unplaced: ['state.md, line 7: a line about the weather was not placed.'] });
+  assert.match(said, /^Imported run the-weir: "The Weir"\.\n2 scenes, 1 entry, 3 facts, 1 trail note, 0 rulings, 1 thread, 0 waypoints, 0 journey legs, 1 clock\./);
+  assert.match(said, /1 line could not be placed:\n- state\.md, line 7: a line about the weather was not placed\./);
+  assert.match(importedRunInWords({ run, counts, unplaced: [] }), /Every line was placed\.$/);
 });

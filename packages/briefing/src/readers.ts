@@ -157,7 +157,7 @@ export function findInRun(snapshot: RunSnapshot, text: string, limit: number): F
   // scene could be left out of a briefing with nothing anywhere that fetches it.
   const legs = snapshot.legs
     .filter((leg) => !wasEstablishedInAStruckScene(index, leg.sceneId))
-    .sort((left, right) => compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id));
+    .sort((left, right) => compareText(left.createdAt, right.createdAt));
   for (const leg of legs) {
     if (firstExcerpt([leg.fromPlace, leg.toPlace, leg.duration, leg.note], needle) === null) continue;
     const legNote = leg.note.trim().length > 0 ? ` (${onOneLine(leg.note)})` : '';
@@ -215,9 +215,13 @@ export function sceneInFull(snapshot: RunSnapshot, number: number): SceneInFull 
   if (!scene) throw new Refusal(`This run has no standing scene ${number}.`);
   const byEntryName = (left: { entryId: Id; createdAt: string; id: Id }, right: { entryId: Id; createdAt: string; id: Id }): number =>
     compareText(entryNameOf(index, left.entryId) ?? '', entryNameOf(index, right.entryId) ?? '')
-    || compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id);
-  const byCreation = (left: { createdAt: string; id: Id }, right: { createdAt: string; id: Id }): number =>
-    compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id);
+    || compareText(left.createdAt, right.createdAt);
+  // One save writes everything at one moment, so the moment alone cannot order what a scene wrote.
+  // The snapshot lists each kind in the order it was written and a sort keeps equal things in the
+  // order it met them, so nothing here breaks a tie on the id: an id is random, and two stores
+  // given the same scene would then answer in two orders.
+  const byCreation = (left: { createdAt: string }, right: { createdAt: string }): number =>
+    compareText(left.createdAt, right.createdAt);
   return {
     scene,
     entriesIntroduced: snapshot.entries.filter((entry) => entry.introducedInSceneId === scene.id).sort(byCreation),

@@ -5,15 +5,20 @@
  * The answer is always JSON: `{ ok: true, answer }`, or `{ ok: false, refusal }` with status 400
  * where the store refused, 401 without the access token (sent as `Authorization: Bearer`), 404 for
  * a name that is not an operation, 405 for anything but POST, 413 for a body too large, 415 for a
- * body that is not JSON, and 500 for a fault. Over
+ * body that is not JSON, and 500 for a fault. A body may be 5 MB, and 24 MB for `import_run`,
+ * which carries whole files. Over
  * MCP each operation is a tool of the same name taking the same input, answering with text made
  * for a model to read, plus `{ answer }` as structured content. `resume_run` is the exception: its
  * text is the briefing and its structured content carries only the sizes, so the whole result
  * stays inside the budget asked for.
+ *
+ * Over MCP, a parameter sent as null is read as left out, at the top of a tool's input and inside
+ * each item of a list: a client may offer null beside every optional parameter, and no parameter
+ * here gives null a meaning. Over the web a null is refused, as any wrong value is.
  */
 import type { Briefing, EntryLookup, FoundItem, RunListing, SavedScene } from './answers.ts';
 import type {
-  CollisionRecord, EntryNoteRecord, EntryRecord, FactRecord, JourneyLegRecord, RulingRecord, RunSnapshot,
+  CollisionRecord, EntryNoteRecord, EntryRecord, FactRecord, JourneyLegRecord, RulingRecord, RunRecord, RunSnapshot,
   SceneRecord, ThreadRecord,
 } from './records.ts';
 
@@ -34,6 +39,24 @@ export interface SceneInFull {
 /** A scene as a listing shows it: everything but the long record. */
 export type SceneSummary = Omit<SceneRecord, 'record'>;
 
+/** What an import read and wrote, in counts, and what it could not place, in sentences. */
+export interface ImportedRunReport {
+  run: RunRecord;
+  counts: {
+    scenes: number;
+    entries: number;
+    facts: number;
+    trailNotes: number;
+    rulings: number;
+    threads: number;
+    waypoints: number;
+    journeyLegs: number;
+    clocks: number;
+  };
+  /** Every line the reader could not place, naming the file and the line. Nothing is dropped in silence. */
+  unplaced: string[];
+}
+
 export interface AnswerByOperation {
   list_runs: RunListing[];
   begin_run: RunSnapshot;
@@ -51,6 +74,7 @@ export interface AnswerByOperation {
   list_collisions: CollisionRecord[];
   settle_collision: CollisionRecord;
   read_run: RunSnapshot;
+  import_run: ImportedRunReport;
 }
 
 export type WireAnswer<Answer> = { ok: true; answer: Answer } | { ok: false; refusal: string };

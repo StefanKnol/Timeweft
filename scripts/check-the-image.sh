@@ -68,6 +68,21 @@ tools=$(curl -s -X POST "http://127.0.0.1:$port/mcp" -H 'Authorization: Bearer c
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
 echo "$tools" | grep -q '"name":"resume_run"' || fail "the MCP tool list does not offer resume_run."
 
+# save_scene's facts must be offered as an array whose items carry statedByAuthor as a property,
+# which proves the nested schema is offered whole rather than flattened to an array of anything.
+# A bare grep for the word would not do: record_ruling has a top-level parameter of that name.
+echo "$tools" | jq -e '.result.tools[] | select(.name == "save_scene") | .inputSchema.properties.facts.items.properties.statedByAuthor' >/dev/null \
+  || fail "the MCP tool list does not offer statedByAuthor among save_scene's facts items."
+
+# The pages import a run kept by hand through this route. Two tiny made-up files, inline.
+imported=$(curl -s -X POST "http://127.0.0.1:$port/api/operations/import_run" \
+  -H 'Authorization: Bearer check-token' -H 'content-type: application/json' \
+  -d '{"slug":"the-mill-ford","files":{"log":"# The Mill Ford - Log\n\n## Scene 1: The crossing\n**When:** the first morning\nThe miller crosses the ford.\n","cast":"# The Mill Ford - Cast\n\n## Ada the miller (she)\n- **Who:** keeps the mill by the ford.\n"}}')
+echo "$imported" | grep -q '"ok":true' || fail "import_run did not import a made-up run."
+runs=$(curl -s -X POST "http://127.0.0.1:$port/api/operations/list_runs" \
+  -H 'Authorization: Bearer check-token' -H 'content-type: application/json' -d '{}')
+echo "$runs" | grep -q '"slug":"the-mill-ford"' || fail "the imported run is not listed."
+
 if docker run --rm "$image" a-command-it-does-not-know >/dev/null 2>&1; then
   fail "an unknown command was accepted."
 fi

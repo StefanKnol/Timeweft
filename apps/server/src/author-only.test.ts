@@ -69,6 +69,7 @@ function storyInputs(sceneSuffix: string): Record<OperationName, Record<string, 
     list_collisions: null,
     settle_collision: null,
     read_run: null,
+    import_run: null,
   };
 }
 

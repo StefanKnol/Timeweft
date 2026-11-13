@@ -12,10 +12,10 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { RUN_STATUSES, Refusal, type RunSnapshot, type RunStatus, type Store, type WeaverFiles } from '@timeweft/contract';
+import { RUN_STATUSES, Refusal, type ImportedRunReport, type RunStatus, type Store, type WeaverFiles } from '@timeweft/contract';
 import { openStore } from '@timeweft/store';
 import { DatabaseAddressNotSet, databaseAddressFromEnvironment } from './database-address.ts';
-import { readWeaverFiles, type ReadWeaverFilesOptions } from '@timeweft/weaver-files';
+import { NothingToImport, RUN_FILE_NAMES, importWeaverFiles, type ImportOptions } from './import-a-run.ts';
 
 export interface ImportRequest {
   folder: string;
@@ -54,9 +54,6 @@ export function importRequestFromArguments(argumentsGiven: string[]): ImportRequ
   if (values['unplaced-report'] !== undefined) request.unplacedReport = values['unplaced-report'];
   return request;
 }
-
-/** The five files a run keeps, by the part of the run each one holds. */
-const RUN_FILE_NAMES = { log: 'log.md', state: 'state.md', cast: 'cast.md', items: 'items.md', places: 'places.md' } as const;
 
 /**
  * One file's text, or an empty string where the run did not keep that file.
@@ -97,35 +94,36 @@ export async function readFolder(folder: string): Promise<WeaverFiles> {
 }
 
 /** What the command says: counts, never content. */
-export function countsInWords(snapshot: RunSnapshot, unplacedCount: number): string[] {
-  const standing = snapshot.scenes.filter((scene) => scene.status === 'standing').length;
+export function countsInWords(report: ImportedRunReport): string[] {
+  const { counts } = report;
   return [
-    `Imported run ${snapshot.run.slug}.`,
-    `Scenes: ${standing}`,
-    `Entries: ${snapshot.entries.length}`,
-    `Facts: ${snapshot.facts.length}`,
-    `Trail notes: ${snapshot.notes.length}`,
-    `Rulings: ${snapshot.rulings.length}`,
-    `Threads: ${snapshot.threads.length}`,
-    `Waypoints: ${snapshot.waypoints.length}`,
-    `Journey legs: ${snapshot.legs.length}`,
-    `Clocks: ${snapshot.clocks.length}`,
-    `Unplaced lines: ${unplacedCount}`,
+    `Imported run ${report.run.slug}.`,
+    `Scenes: ${counts.scenes}`,
+    `Entries: ${counts.entries}`,
+    `Facts: ${counts.facts}`,
+    `Trail notes: ${counts.trailNotes}`,
+    `Rulings: ${counts.rulings}`,
+    `Threads: ${counts.threads}`,
+    `Waypoints: ${counts.waypoints}`,
+    `Journey legs: ${counts.journeyLegs}`,
+    `Clocks: ${counts.clocks}`,
+    `Unplaced lines: ${report.unplaced.length}`,
   ];
 }
 
-/** Reads the folder, imports through the store, and answers with the lines to print. */
+/** Reads the folder, imports through the one import, and answers with the lines to print. */
 export async function importRun(store: Store, request: ImportRequest): Promise<string[]> {
-  const options: ReadWeaverFilesOptions = { slug: request.slug };
+  const options: ImportOptions = { slug: request.slug };
   if (request.title !== undefined) options.title = request.title;
   if (request.setting !== undefined) options.setting = request.setting;
   if (request.status !== undefined) options.status = request.status;
-  const run = readWeaverFiles(await readFolder(request.folder), options);
-  let snapshot: RunSnapshot;
+  const files = await readFolder(request.folder);
+  let report: ImportedRunReport;
   try {
-    snapshot = await store.importRun(run);
+    report = await importWeaverFiles(store, files, options);
   } catch (error) {
-    if (!(error instanceof Refusal)) throw error;
+    // Five empty files quote nothing, so that refusal is said as it is.
+    if (!(error instanceof Refusal) || error instanceof NothingToImport) throw error;
     // The store's refusal names what it could not resolve, which quotes the files, so it goes to
     // the report and never to the console.
     if (request.unplacedReport === undefined) {
@@ -134,9 +132,9 @@ export async function importRun(store: Store, request: ImportRequest): Promise<s
     await writeFile(request.unplacedReport, `${error.message}\n`, 'utf8');
     throw new Refusal(`The store refused the import, and nothing was written. The reasons are in ${request.unplacedReport}.`);
   }
-  const lines = countsInWords(snapshot, run.unplaced.length);
+  const lines = countsInWords(report);
   if (request.unplacedReport !== undefined) {
-    await writeFile(request.unplacedReport, run.unplaced.map((sentence) => `${sentence}\n`).join(''), 'utf8');
+    await writeFile(request.unplacedReport, report.unplaced.map((sentence) => `${sentence}\n`).join(''), 'utf8');
     lines.push(`The unplaced lines were written to ${request.unplacedReport}.`);
   }
   return lines;
