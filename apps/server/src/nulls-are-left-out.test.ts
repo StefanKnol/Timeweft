@@ -1,10 +1,7 @@
 /**
- * The tool list a real MCP client receives says, in each object parameter's description, every
- * field of its items, since a hub may pass on the description and drop the fields. And a null sent
- * for an optional parameter answers exactly as the parameter left out.
- *
- * The parameters are found by walking the contract, never listed by hand, so a parameter added
- * there is held here with nothing else touched.
+ * A null sent for an optional parameter answers exactly as the parameter left out, on the MCP face,
+ * and a null for a required one is still refused by its name. Over the web a null stays the
+ * contract's to refuse.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,9 +10,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { OPERATIONS } from '@timeweft/contract';
 import { STORY_TOOL_NAMES } from './mcp.ts';
 import { startServerForTests, type RunningServer } from './server-for-tests.ts';
-import {
-  argumentsWithNullsLeftOut, fieldsInWords, inputSchemaForAHub, itemObjectOf, parameterDescriptionForAHub, plainObjectOf,
-} from './tools-that-survive-a-hub.ts';
+import { argumentsWithNullsLeftOut } from './nulls-are-left-out.ts';
 
 let running: RunningServer;
 let client: Client;
@@ -31,108 +26,14 @@ function shapeOf(schema: ZodTypeAny): Record<string, ZodTypeAny> {
   return (schema as unknown as z.AnyZodObject).shape as Record<string, ZodTypeAny>;
 }
 
-interface PropertySchema {
-  type?: string | string[];
-  description?: string;
-  items?: { type?: string; properties?: Record<string, unknown> };
-  properties?: Record<string, unknown>;
+/** The object an optional array parameter's items are, found by peeling its default and optional. */
+function itemObjectOf(schema: ZodTypeAny): z.AnyZodObject | null {
+  let current: ZodTypeAny = schema;
+  while (current instanceof z.ZodDefault || current instanceof z.ZodOptional) current = current._def.innerType as ZodTypeAny;
+  if (!(current instanceof z.ZodArray)) return null;
+  const item = current.element as ZodTypeAny;
+  return item instanceof z.ZodObject ? item : null;
 }
-
-async function toolProperties(): Promise<Map<string, Record<string, PropertySchema>>> {
-  const { tools } = await client.listTools();
-  return new Map(tools.map((tool) => [tool.name, (tool.inputSchema.properties ?? {}) as Record<string, PropertySchema>]));
-}
-
-test('every object parameter of every story tool says each field of its items, as the client receives it', async () => {
-  const received = await toolProperties();
-  let checked = 0;
-  for (const name of STORY_TOOL_NAMES) {
-    for (const [parameterName, parameter] of Object.entries(shapeOf(OPERATIONS[name].input))) {
-      const objectSchema = itemObjectOf(parameter) ?? plainObjectOf(parameter);
-      if (objectSchema === null) continue;
-      const description = received.get(name)?.[parameterName]?.description ?? '';
-      for (const field of Object.keys(shapeOf(objectSchema))) {
-        assert.ok(description.includes(`${field} (`), `${name}.${parameterName} does not say its field ${field}: "${description}"`);
-      }
-      checked += 1;
-    }
-  }
-  assert.ok(checked >= 10, `only ${checked} object parameters were found, so the walk found too few`);
-});
-
-test('read from the received JSON schema alone, every array of objects names its items\' fields', async () => {
-  // A walk independent of the zod helpers, so a helper that misses a wrapper cannot hide a parameter.
-  const received = await toolProperties();
-  for (const [name, properties] of received) {
-    for (const [parameterName, property] of Object.entries(properties)) {
-      const fields = property.type === 'array' && property.items?.type === 'object'
-        ? Object.keys(property.items.properties ?? {})
-        : property.type === 'object' ? Object.keys(property.properties ?? {}) : [];
-      for (const field of fields) {
-        assert.ok((property.description ?? '').includes(`${field} (`), `${name}.${parameterName} lost its field ${field} for a hub`);
-      }
-    }
-  }
-});
-
-test('a fact is described field by field, each with its kind, whether required, and its own words', async () => {
-  const description = (await toolProperties()).get('save_scene')?.['facts']?.description ?? '';
-  assert.match(description, /^What this scene established or changed\. Each item is an object with: entry \(text, required\): The name of the entry the fact is about\. property \(text, required\): /);
-  assert.match(description, /about \(text, optional\): The name of another entry/);
-  assert.match(description, /statedByAuthor \(yes or no, optional\): True only where the author said this/);
-  assert.match(description, /alongside \(yes or no, optional\)/);
-  assert.match(description, / note \(text, optional\)\.$/);
-  const readings = (await toolProperties()).get('save_scene')?.['readings']?.description ?? '';
-  assert.match(readings, /count \(a number or text, required\)/);
-  const entries = (await toolProperties()).get('save_scene')?.['entries']?.description ?? '';
-  assert.match(entries, /kind \(one of "person", "group", "place", "item", "other", required\)/);
-  assert.match(entries, /alsoKnownAs \(a list of text, optional\)/);
-});
-
-test('a field added to a copy of a schema appears in the sentence, with nothing else touched', () => {
-  const facts = shapeOf(OPERATIONS.save_scene.input)['facts']!;
-  const item = itemObjectOf(facts) as unknown as z.AnyZodObject;
-  const withAMadeUpField = z.array(item.extend({ weather: z.string().describe('What the sky over the ford was doing.') })).default([]);
-  assert.match(parameterDescriptionForAHub(withAMadeUpField), /weather \(text, required\): What the sky over the ford was doing\./);
-  const copiedInput = (OPERATIONS.save_scene.input as unknown as z.AnyZodObject).extend({ facts: withAMadeUpField });
-  const offered = shapeOf(inputSchemaForAHub(copiedInput))['facts']!;
-  assert.match(offered.description ?? '', /weather \(text, required\)/);
-  assert.match(fieldsInWords(z.object({ count: z.number().int(), flags: z.array(z.boolean()).optional() })), /^count \(a number, required\)\. flags \(a list of yes or no values, optional\)\.$/);
-  assert.match(parameterDescriptionForAHub(z.object({ ford: z.string() }).optional()), /^It is an object with: ford \(text, required\)\.$/);
-});
-
-test('the tool list is generated for MCP only: parsing a tool\'s input is unchanged', () => {
-  for (const name of STORY_TOOL_NAMES) {
-    const offered = inputSchemaForAHub(OPERATIONS[name].input);
-    assert.deepEqual(Object.keys(shapeOf(offered)).sort(), Object.keys(shapeOf(OPERATIONS[name].input)).sort(), `${name} changed its parameters`);
-  }
-});
-
-/**
- * Plain parameters the contract leaves with no description. Said here, and reported, rather than
- * given invented words. The test fails on any other, and on one of these once the contract gives
- * it words, so the list only shrinks.
- */
-const LEFT_BLANK_BY_THE_CONTRACT = new Set([
-  'begin_run.title', 'begin_run.setting', 'begin_run.status', 'save_scene.title', 'redo_scene.title', 'read_scene.number',
-  'list_scenes.from', 'list_scenes.to', 'list_scenes.starredOnly', 'look_up.name', 'look_up.withHistory', 'find.text',
-  'find.limit', 'list_rulings.topic', 'list_rulings.about', 'list_threads.about', 'list_threads.includeClosed',
-  'record_ruling.statedByAuthor',
-]);
-
-test('no parameter of any tool has an empty description, but those the contract still leaves blank', async () => {
-  const received = await toolProperties();
-  const blank: string[] = [];
-  for (const [name, properties] of received) {
-    for (const [parameterName, property] of Object.entries(properties)) {
-      if ((property.description ?? '').trim() === '') blank.push(`${name}.${parameterName}`);
-    }
-  }
-  const newlyBlank = blank.filter((parameter) => !LEFT_BLANK_BY_THE_CONTRACT.has(parameter));
-  assert.deepEqual(newlyBlank, [], `these parameters reach a chat with no description: ${newlyBlank.join(', ')}`);
-  const nowDescribed = [...LEFT_BLANK_BY_THE_CONTRACT].filter((parameter) => !blank.includes(parameter));
-  assert.deepEqual(nowDescribed, [], `the contract describes these now; take them off the list: ${nowDescribed.join(', ')}`);
-});
 
 test('a null is dropped at the top and inside each item, and nothing else is touched', () => {
   assert.deepEqual(

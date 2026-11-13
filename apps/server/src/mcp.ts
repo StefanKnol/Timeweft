@@ -1,8 +1,8 @@
 /**
  * The story operations as MCP tools. One tool per operation whose audience is `story`, named as
  * the operation, with the title, description and input schema taken from the contract and never
- * retyped; what is added for a hub in front is generated from the same schema. The author's operations are not offered here at all: a chat writing a story is the only
- * caller this face has.
+ * retyped. The author's operations are not offered here at all: a chat writing a story is the
+ * only caller this face has.
  *
  * It is stateless: every request gets a fresh server and transport, so no session lives in memory
  * and nothing about one chat can reach another.
@@ -17,7 +17,7 @@ import {
 import { ANSWER_IN_WORDS, NO_NAMES, briefingInWords, namesInTheRun, type NamesInTheRun } from './in-words.ts';
 import { buildBriefing } from '@timeweft/briefing';
 import { parseOperationInput, runOperation, snapshotForOperation } from './operations.ts';
-import { inputSchemaForAHub, messageWithNullArgumentsLeftOut } from './tools-that-survive-a-hub.ts';
+import { messageWithNullArgumentsLeftOut } from './nulls-are-left-out.ts';
 
 /** The operations offered as tools: every story operation, and only those. */
 export const STORY_TOOL_NAMES: OperationName[] = OPERATION_NAMES.filter((name) => OPERATIONS[name].audience === 'story');
@@ -108,9 +108,9 @@ export function makeMcpServer(store: Store): McpServer {
     server.registerTool(name, {
       title: definition.title,
       description: definition.description,
-      // The contract's schema, with each object parameter's fields said in its description, since
-      // a hub may pass on the description and drop the fields.
-      inputSchema: inputSchemaForAHub(definition.input),
+      // The contract's own schema, whole: every parameter and every item field carries its own
+      // description there, so the tool list needs nothing added.
+      inputSchema: definition.input,
       annotations: {
         title: definition.title,
         readOnlyHint: definition.effect === 'reads',
@@ -131,7 +131,7 @@ export async function serveMcpRequest(store: Store, request: IncomingMessage, re
     server.close().catch((error: unknown) => console.error('Closing an MCP server failed:', error));
   });
   await server.connect(transport);
-  // A null is read as left out before the SDK parses a tool's input, since a hub offers null
+  // A null is read as left out before the SDK parses a tool's input, since a client may offer null
   // beside every optional parameter and the contract gives null no meaning anywhere.
   await transport.handleRequest(request, response, messageWithNullArgumentsLeftOut(parsedBody));
 }

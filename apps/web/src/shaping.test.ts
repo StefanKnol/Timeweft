@@ -280,6 +280,11 @@ test('a response is read as an answer, a refusal, a need for the token, or a fau
   assert.equal(outcomeOfResponse(500, JSON.stringify({ ok: false, refusal: 'boom' })).kind, 'fault');
   assert.equal(outcomeOfResponse(404, JSON.stringify({ ok: false, refusal: 'no such operation' })).kind, 'fault');
   assert.equal(outcomeOfResponse(502, '<html>bad gateway</html>').kind, 'fault');
+  // A body too large is said in the server's own sentence, not as a fault with a status in it.
+  assert.deepEqual(
+    outcomeOfResponse(413, JSON.stringify({ ok: false, refusal: 'The request body is larger than 24 MB, which is the most this route takes.' })),
+    { kind: 'refusal', refusal: 'The request body is larger than 24 MB, which is the most this route takes.' },
+  );
   assert.equal(outcomeOfResponse(200, JSON.stringify({ answer: 1 })).kind, 'fault');
 });
 

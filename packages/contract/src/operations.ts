@@ -20,7 +20,7 @@ export const AUDIENCES = ['story', 'author'] as const;
 export type Audience = (typeof AUDIENCES)[number];
 
 const runHandle = z.string().min(1).describe("The run's slug, as list_runs gives it.");
-const sceneNumber = z.number().int().min(1);
+const sceneNumber = z.number().int().min(1).describe("The scene's number in the run.");
 
 const clockReadingInput = z.object({
   clock: z.string().min(1).describe('The name of one of the run\'s clocks.'),
@@ -29,10 +29,10 @@ const clockReadingInput = z.object({
 });
 
 const entryInput = z.object({
-  name: z.string().min(1),
-  kind: z.enum(ENTRY_KINDS),
-  alsoKnownAs: z.array(z.string()).default([]),
-  pronoun: z.string().default(''),
+  name: z.string().min(1).describe('The name it is known by. Two things may share a name.'),
+  kind: z.enum(ENTRY_KINDS).describe('What it is: a person, a group of people, a place, an item, or other.'),
+  alsoKnownAs: z.array(z.string()).default([]).describe('Other names it goes by, so it can be found under them.'),
+  pronoun: z.string().default('').describe('For a person: how the narration refers to them.'),
 });
 
 const factInput = z.object({
@@ -42,37 +42,37 @@ const factInput = z.object({
   about: z.string().optional().describe('The name of another entry the fact points at, such as who holds an item.'),
   statedByAuthor: z.boolean().default(false).describe('True only where the author said this in so many words. The author\'s word outranks a story\'s.'),
   alongside: z.boolean().default(false).describe('True to add this beside what the property already holds. Left false, it replaces what was so and the earlier fact is kept as history.'),
-  note: z.string().default(''),
+  note: z.string().default('').describe('A remark on the fact, where one is needed.'),
 });
 
 const noteInput = z.object({
-  entry: z.string().min(1),
+  entry: z.string().min(1).describe('The name of the entry the note is about.'),
   text: z.string().min(1).describe('What happened to or with them in this scene, in a sentence or two.'),
 });
 
 const rulingInput = z.object({
   text: z.string().min(1).describe('Word for word, as given.'),
-  statedByAuthor: z.boolean().default(true),
+  statedByAuthor: z.boolean().default(true).describe('True where the author gave it, which is the usual case and what is assumed when left out. False where the story itself settled it.'),
   scope: z.enum(RULING_SCOPES).default('run').describe('`world` where it says how things are everywhere, `run` where it is about how this story is played.'),
   topics: z.array(z.string()).default([]).describe('What it bears on: narration, time, naming, a practice, a theme.'),
   about: z.array(z.string()).default([]).describe('The names of the entries it is about.'),
 });
 
 const threadInput = z.object({
-  text: z.string().min(1),
-  about: z.array(z.string()).default([]),
+  text: z.string().min(1).describe('What is left open: a question, a promise, a tension.'),
+  about: z.array(z.string()).default([]).describe('The names of the entries it touches.'),
 });
 
 const legInput = z.object({
-  from: z.string().min(1),
-  to: z.string().min(1),
-  duration: z.string().min(1),
-  note: z.string().default(''),
+  from: z.string().min(1).describe('The place the journey starts at.'),
+  to: z.string().min(1).describe('The place it ends at.'),
+  duration: z.string().min(1).describe("How long it took, in the setting's own words."),
+  note: z.string().default('').describe('Who travelled and how, where that matters.'),
 });
 
 const sceneInput = z.object({
   run: runHandle,
-  title: z.string().min(1),
+  title: z.string().min(1).describe('A short title for the scene.'),
   starred: z.boolean().default(false).describe('A scene a later story could lean on: a first, an only, a turning point.'),
   when: z.string().min(1).describe('When it happens, as the setting says it.'),
   place: z.string().optional().describe('The name of the place it happens at.'),
@@ -80,15 +80,15 @@ const sceneInput = z.object({
   record: z.string().default('').describe('Everything worth keeping that the summary leaves out: who was there, what changed, anchors, lines as spoken.'),
   steer: z.string().default('').describe('What the author directed at this scene, in their words.'),
   situationAfter: z.string().min(1).describe('Where things stand now, in a short paragraph. Only the present: the store keeps what came before.'),
-  readings: z.array(clockReadingInput).default([]),
+  readings: z.array(clockReadingInput).default([]).describe("Where each of the run's clocks stands at this scene."),
   entries: z.array(entryInput).default([]).describe('Anyone and anything named for the first time.'),
   facts: z.array(factInput).default([]).describe('What this scene established or changed.'),
-  notes: z.array(noteInput).default([]),
-  rulings: z.array(rulingInput).default([]),
-  threadsOpened: z.array(threadInput).default([]),
-  threadsClosed: z.array(z.object({ thread: z.string().min(1).describe('The id of the thread.'), resolution: z.string().min(1) })).default([]),
+  notes: z.array(noteInput).default([]).describe('What happened to or with each entry in this scene: its trail.'),
+  rulings: z.array(rulingInput).default([]).describe('Instructions given at this scene, kept word for word.'),
+  threadsOpened: z.array(threadInput).default([]).describe('What this scene left open.'),
+  threadsClosed: z.array(z.object({ thread: z.string().min(1).describe('The id of the thread.'), resolution: z.string().min(1).describe('How it closed, in a sentence.') })).default([]).describe('Threads this scene closed.'),
   waypointsReached: z.array(z.string()).default([]).describe('The ids of waypoints this scene reached.'),
-  legs: z.array(legInput).default([]),
+  legs: z.array(legInput).default([]).describe('Journeys travelled for the first time in this scene.'),
 });
 
 export interface OperationDefinition<Input extends z.ZodTypeAny = z.ZodTypeAny> {
@@ -123,12 +123,15 @@ export const OPERATIONS = {
     audience: 'story',
     input: z.object({
       slug: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/).describe('A short handle in lower case with hyphens.'),
-      title: z.string().min(1),
-      setting: z.string().default(''),
-      status: z.enum(RUN_STATUSES).default('binding'),
+      title: z.string().min(1).describe("The story's title."),
+      setting: z.string().default('').describe('Where and when it is set, in a sentence or two.'),
+      status: z.enum(RUN_STATUSES).default('binding').describe('`binding`, the usual case: what the story establishes is canon at once. `telling`: its facts stay inside the run.'),
       continues: z.string().optional().describe('The slug of the run this one follows on from.'),
       register: z.string().default('').describe('How it is narrated: voice, spelling, point of view.'),
-      clocks: z.array(z.object({ name: z.string().min(1), countsFrom: z.string().default('') })).default([]),
+      clocks: z.array(z.object({
+        name: z.string().min(1).describe("The clock's name, such as the name of a count of days."),
+        countsFrom: z.string().default('').describe('What it counts and from what, in words.'),
+      })).default([]).describe('The exact counts the story keeps side by side.'),
       waypoints: z.array(z.string()).default([]).describe('Scenes the author wants the run to reach.'),
     }),
   }),
@@ -178,9 +181,9 @@ export const OPERATIONS = {
     audience: 'story',
     input: z.object({
       run: runHandle,
-      from: sceneNumber.optional(),
-      to: sceneNumber.optional(),
-      starredOnly: z.boolean().default(false),
+      from: sceneNumber.optional().describe('The first scene to list. Left out, the first of the run.'),
+      to: sceneNumber.optional().describe('The last scene to list. Left out, the newest.'),
+      starredOnly: z.boolean().default(false).describe('True to list only the starred scenes.'),
     }),
   }),
   look_up: operation({
@@ -191,8 +194,8 @@ export const OPERATIONS = {
     audience: 'story',
     input: z.object({
       run: runHandle,
-      name: z.string().min(1),
-      withHistory: z.boolean().default(false),
+      name: z.string().min(1).describe('The name, or another name it goes by.'),
+      withHistory: z.boolean().default(false).describe('True to include what was so before, newest first.'),
       trail: z.number().int().min(0).max(200).default(8).describe('How many of the latest trail notes to include.'),
     }),
   }),
@@ -202,7 +205,7 @@ export const OPERATIONS = {
     description: 'Search a run for a word or phrase across names, facts, trail notes, scenes, rulings and threads. Use it before inventing anything that may already exist.',
     effect: 'reads',
     audience: 'story',
-    input: z.object({ run: runHandle, text: z.string().min(2), limit: z.number().int().min(1).max(100).default(30) }),
+    input: z.object({ run: runHandle, text: z.string().min(2).describe('The word or phrase to look for.'), limit: z.number().int().min(1).max(100).default(30).describe('The most results to answer with.') }),
   }),
   list_rulings: operation({
     name: 'list_rulings',
@@ -210,7 +213,7 @@ export const OPERATIONS = {
     description: 'The rulings that bear on a topic or on named entries, word for word. With neither given, every ruling still in force.',
     effect: 'reads',
     audience: 'story',
-    input: z.object({ run: runHandle, topic: z.string().optional(), about: z.array(z.string()).default([]) }),
+    input: z.object({ run: runHandle, topic: z.string().optional().describe('A topic to narrow to, such as narration.'), about: z.array(z.string()).default([]).describe('Names of entries to narrow to.') }),
   }),
   list_threads: operation({
     name: 'list_threads',
@@ -218,7 +221,7 @@ export const OPERATIONS = {
     description: 'What is still open in a run, optionally only what touches the named entries.',
     effect: 'reads',
     audience: 'story',
-    input: z.object({ run: runHandle, about: z.array(z.string()).default([]), includeClosed: z.boolean().default(false) }),
+    input: z.object({ run: runHandle, about: z.array(z.string()).default([]).describe('Names of entries to narrow to.'), includeClosed: z.boolean().default(false).describe('True to list closed threads as well.') }),
   }),
   record_ruling: operation({
     name: 'record_ruling',

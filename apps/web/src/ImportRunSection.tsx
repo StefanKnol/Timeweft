@@ -3,7 +3,7 @@ import { RUN_STATUSES } from '@timeweft/contract';
 import type { ImportedRunReport, RunStatus } from '@timeweft/contract';
 import { useCallOperation } from './calling.tsx';
 import {
-  IMPORT_PARTS, hashOfRoute, importCountsInWords, importRunInput, matchFilesToParts, sizeInWords, slugShown,
+  IMPORT_PARTS, hashOfRoute, importCountsInWords, importToSend, matchFilesToParts, sizeInWords, slugShown,
   titleFromLogText, unplacedInWords, whyImportCannotStart, type ImportPart,
 } from './shaping.ts';
 
@@ -12,6 +12,7 @@ type ImportResult =
   | { state: 'running' }
   | { state: 'imported'; report: ImportedRunReport }
   | { state: 'refused'; refusal: string }
+  | { state: 'not-sent'; reason: string }
   | { state: 'fault'; fault: string };
 
 /**
@@ -70,7 +71,12 @@ export function ImportRunSection({ onImported }: { onImported: () => void }) {
       setResult({ state: 'fault', fault: `A file could not be read (${error instanceof Error ? error.message : String(error)}).` });
       return;
     }
-    const outcome = await callOperation('import_run', importRunInput({ slug, title, setting, status }, textByPart));
+    const toSend = importToSend({ slug, title, setting, status }, textByPart);
+    if (!toSend.ok) {
+      setResult({ state: 'not-sent', reason: toSend.reason });
+      return;
+    }
+    const outcome = await callOperation('import_run', toSend.input);
     if (outcome.kind === 'answer') {
       setResult({ state: 'imported', report: outcome.answer });
       onImported();
@@ -203,10 +209,11 @@ export function ImportRunSection({ onImported }: { onImported: () => void }) {
         )}
         {result.state === 'refused' && (
           <>
-            <p className="refusal">The store refused the import:</p>
+            <p className="refusal">The server refused the import:</p>
             <div className="scrolling-text refusal" tabIndex={0} aria-label="Why the import was refused">{result.refusal}</div>
           </>
         )}
+        {result.state === 'not-sent' && <p className="refusal" role="alert">{result.reason}</p>}
         {result.state === 'fault' && <p className="refusal">Something went wrong: {result.fault}</p>}
       </div>
     </details>

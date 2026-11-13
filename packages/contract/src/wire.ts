@@ -12,10 +12,9 @@
  * text is the briefing and its structured content carries only the sizes, so the whole result
  * stays inside the budget asked for.
  *
- * A hub or proxy between a chat and the server may flatten a tool's input: an array of objects
- * arrives at the chat as an array of anything, with the fields of its items gone. So each such
- * parameter's description also says its items' fields in words, made from the same schema, and a
- * parameter sent as null is read as left out.
+ * Over MCP, a parameter sent as null is read as left out, at the top of a tool's input and inside
+ * each item of a list: a client may offer null beside every optional parameter, and no parameter
+ * here gives null a meaning. Over the web a null is refused, as any wrong value is.
  */
 import type { Briefing, EntryLookup, FoundItem, RunListing, SavedScene } from './answers.ts';
 import type {

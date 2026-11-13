@@ -68,8 +68,11 @@ tools=$(curl -s -X POST "http://127.0.0.1:$port/mcp" -H 'Authorization: Bearer c
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
 echo "$tools" | grep -q '"name":"resume_run"' || fail "the MCP tool list does not offer resume_run."
 
-# A hub may drop the fields of an array's items, so each such parameter says them in words.
-echo "$tools" | grep -q 'statedByAuthor (' || fail "the MCP tool list does not name statedByAuthor in save_scene's facts."
+# save_scene's facts must be offered as an array whose items carry statedByAuthor as a property,
+# which proves the nested schema is offered whole rather than flattened to an array of anything.
+# A bare grep for the word would not do: record_ruling has a top-level parameter of that name.
+echo "$tools" | jq -e '.result.tools[] | select(.name == "save_scene") | .inputSchema.properties.facts.items.properties.statedByAuthor' >/dev/null \
+  || fail "the MCP tool list does not offer statedByAuthor among save_scene's facts items."
 
 # The pages import a run kept by hand through this route. Two tiny made-up files, inline.
 imported=$(curl -s -X POST "http://127.0.0.1:$port/api/operations/import_run" \

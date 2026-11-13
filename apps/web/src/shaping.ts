@@ -454,6 +454,9 @@ export function outcomeOfResponse<Answer>(status: number, bodyText: string): Cal
     return { kind: 'fault', fault: `The server answered ${status} and said it succeeded.` };
   }
   if (status === 400) return { kind: 'refusal', refusal: wire.refusal };
+  // A body too large is refused before the operation runs, and the server's sentence names the
+  // route's limit, which is what the author needs rather than a fault with a status in it.
+  if (status === 413) return { kind: 'refusal', refusal: wire.refusal };
   return { kind: 'fault', fault: `The server answered ${status}: ${wire.refusal}` };
 }
 
@@ -498,11 +501,11 @@ export const IMPORT_PARTS = ['log', 'state', 'cast', 'items', 'places'] as const
 export type ImportPart = (typeof IMPORT_PARTS)[number];
 
 /**
- * The most the page sends in one import. The server takes a body of 24 MB for `import_run`;
- * the files are measured on disk here, and JSON adds a little to text as it carries it (a line
- * break becomes two characters), so 20 MB leaves room for that rather than meeting a 413.
+ * The largest body the server takes for `import_run`: the figure of
+ * `LARGEST_BODY_BYTES_BY_OPERATION.import_run` in apps/server/src/http-server.ts, which the
+ * contract does not hold. A server test reads this file and fails if the two figures part.
  */
-export const LARGEST_IMPORT_BYTES = 20 * 1024 * 1024;
+export const LARGEST_IMPORT_BODY_BYTES = 24 * 1024 * 1024;
 
 /** A picked file as the matching needs it. The browser's `File` has both. */
 export interface FileToMatch {
@@ -550,7 +553,8 @@ export function matchFilesToParts<FilePicked extends FileToMatch>(files: readonl
     const candidates = candidatesByPart.get(part) ?? [];
     if (candidates.length === 1) byPart[part] = candidates[0] ?? null;
     if (candidates.length > 1) {
-      refusals.push(`${namesInWords(candidates.map((file) => `"${file.name}"`))} are all read as ${part}.md. Pick only one of them.`);
+      const everyOne = candidates.length === 2 ? 'both' : 'all';
+      refusals.push(`${namesInWords(candidates.map((file) => `"${file.name}"`))} are ${everyOne} read as ${part}.md. Pick only one of them.`);
     }
   }
   return { byPart, notUsed, refusals };
@@ -619,11 +623,15 @@ export function megabytesInWords(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Why the files together are too large to send, or null where they fit. */
+/**
+ * Why the files together are too large to send, or null where they may fit, asked before they
+ * are read. What is sent is never smaller than the files, since JSON only adds to text, so files
+ * over the limit can never fit; files under it may still not, which `importToSend` says.
+ */
 export function whyFilesAreTooLarge(sizes: readonly number[]): string | null {
   const totalBytes = sizes.reduce((sum, size) => sum + size, 0);
-  if (totalBytes <= LARGEST_IMPORT_BYTES) return null;
-  return `The files come to ${megabytesInWords(totalBytes)} together, and an import takes at most ${megabytesInWords(LARGEST_IMPORT_BYTES)}.`;
+  if (totalBytes <= LARGEST_IMPORT_BODY_BYTES) return null;
+  return `The files come to ${megabytesInWords(totalBytes)} together, and an import takes at most ${megabytesInWords(LARGEST_IMPORT_BODY_BYTES)}.`;
 }
 
 /**
@@ -663,6 +671,29 @@ export function importRunInput(form: ImportForm, textByPart: Partial<Record<Impo
     ...(setting === '' ? {} : { setting }),
     status: form.status,
     files: Object.fromEntries(IMPORT_PARTS.map((part) => [part, textByPart[part] ?? ''])) as Record<ImportPart, string>,
+  };
+}
+
+/** The size of a request body as it travels: its JSON, escaping counted, in UTF-8 bytes. */
+export function bodyBytesOf(input: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(input)).length;
+}
+
+/**
+ * The input to send, or why it cannot be sent: the body is measured as it will travel, since
+ * JSON escaping can more than double a text (a quote or a line break becomes two characters),
+ * and is held to the server's limit so an import the page starts never meets a 413.
+ */
+export function importToSend(
+  form: ImportForm,
+  textByPart: Partial<Record<ImportPart, string>>,
+): { ok: true; input: RequestOf<'import_run'> } | { ok: false; reason: string } {
+  const input = importRunInput(form, textByPart);
+  const bodyBytes = bodyBytesOf(input);
+  if (bodyBytes <= LARGEST_IMPORT_BODY_BYTES) return { ok: true, input };
+  return {
+    ok: false,
+    reason: `The import comes to ${megabytesInWords(bodyBytes)} as it would be sent, and the server takes at most ${megabytesInWords(LARGEST_IMPORT_BODY_BYTES)}. Nothing was sent.`,
   };
 }
 
