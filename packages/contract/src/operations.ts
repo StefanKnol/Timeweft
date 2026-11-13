@@ -260,6 +260,27 @@ export const OPERATIONS = {
     audience: 'author',
     input: z.object({ collision: z.string().min(1), take: z.enum(['author', 'story']) }),
   }),
+  import_run: operation({
+    name: 'import_run',
+    title: 'Import a run kept by hand',
+    description:
+      'Read a run out of the five Markdown files a story kept by hand (log, state, cast, items, places) and write it as one run. A file the run did not keep is left empty; all five empty is refused. A slug already in the store is refused. The answer counts what was read and lists every line the reader could not place.',
+    effect: 'writes',
+    audience: 'author',
+    input: z.object({
+      slug: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/).describe('A short handle in lower case with hyphens.'),
+      title: z.string().optional().describe("Left out, the title is read from the files' own heading."),
+      setting: z.string().optional(),
+      status: z.enum(RUN_STATUSES).optional(),
+      files: z.object({
+        log: z.string().default(''),
+        state: z.string().default(''),
+        cast: z.string().default(''),
+        items: z.string().default(''),
+        places: z.string().default(''),
+      }).describe('The text of each of the five files.'),
+    }),
+  }),
   read_run: operation({
     name: 'read_run',
     title: 'Read a whole run',
