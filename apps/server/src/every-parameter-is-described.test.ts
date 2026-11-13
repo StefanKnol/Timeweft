@@ -115,3 +115,63 @@ test('an array of objects is offered with its items whole: save_scene\'s facts c
   // Nothing from the removed workaround: the parameter's description is its own and no more.
   assert.doesNotMatch(facts.description ?? '', /Each item is an object with/);
 });
+
+/**
+ * Whether a parameter carries words of its own, on itself or on any wrapper around it: `optional`,
+ * `default`, `nullable` and refinements each keep the description where it was given.
+ */
+function contractDescriptionOf(parameter: ZodTypeAny): string {
+  let current: ZodTypeAny | undefined = parameter;
+  while (current !== undefined) {
+    const said = (current.description ?? '').trim();
+    if (said !== '') return said;
+    if (current instanceof z.ZodDefault || current instanceof z.ZodOptional || current instanceof z.ZodNullable) {
+      current = current._def.innerType as ZodTypeAny;
+    } else if (current instanceof z.ZodEffects) {
+      current = current._def.schema as ZodTypeAny;
+    } else {
+      current = undefined;
+    }
+  }
+  return '';
+}
+
+/** The schema a parameter holds once its wrappers are taken off. */
+function unwrappedInTheContract(parameter: ZodTypeAny): ZodTypeAny {
+  let current: ZodTypeAny = parameter;
+  for (;;) {
+    if (current instanceof z.ZodDefault || current instanceof z.ZodOptional || current instanceof z.ZodNullable) current = current._def.innerType as ZodTypeAny;
+    else if (current instanceof z.ZodEffects) current = current._def.schema as ZodTypeAny;
+    else return current;
+  }
+}
+
+/** Every place under one contract parameter with no description, walked into objects and lists of objects. */
+function contractBlanksUnder(path: string, parameter: ZodTypeAny, describedHere: boolean): string[] {
+  const blanks: string[] = [];
+  if (describedHere && contractDescriptionOf(parameter) === '') blanks.push(path);
+  const inner = unwrappedInTheContract(parameter);
+  if (inner instanceof z.ZodArray) blanks.push(...contractBlanksUnder(`${path}[]`, inner.element as ZodTypeAny, false));
+  if (inner instanceof z.ZodObject) {
+    for (const [field, fieldSchema] of Object.entries(inner.shape as Record<string, ZodTypeAny>)) {
+      blanks.push(...contractBlanksUnder(`${path}.${field}`, fieldSchema, true));
+    }
+  }
+  return blanks;
+}
+
+test('every parameter of every operation, the author\'s included, carries a description in the contract', () => {
+  // The author's operations never reach a client over MCP, so they are read from the contract
+  // itself: the page and anyone reading the routes are told what each field is all the same.
+  const blanks: string[] = [];
+  let authorParametersChecked = 0;
+  for (const [name, definition] of Object.entries(OPERATIONS)) {
+    const shape = (definition.input as unknown as z.AnyZodObject).shape as Record<string, ZodTypeAny>;
+    for (const [parameterName, parameter] of Object.entries(shape)) {
+      if (definition.audience === 'author') authorParametersChecked += 1;
+      blanks.push(...contractBlanksUnder(`${name}.${parameterName}`, parameter, true));
+    }
+  }
+  assert.deepEqual(blanks, [], `these have no description in the contract: ${blanks.join(', ')}`);
+  assert.ok(authorParametersChecked >= 30, `only ${authorParametersChecked} parameters of the author's operations were found`);
+});

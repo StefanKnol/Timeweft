@@ -48,6 +48,13 @@ export const WRITE_MARKS = 'timeweft_write_marks';
 /** The tables whose rows a run holds and an import writes, each carrying a write mark. */
 export const TABLES_A_RUN_WRITES = ['clocks', 'scenes', 'entries', 'facts', 'entry_notes', 'rulings', 'threads', 'waypoints', 'journey_legs'] as const;
 
+/**
+ * The tables migration 6 adds for the author's hand, each carrying a write mark from the start. Kept
+ * apart from `TABLES_A_RUN_WRITES` because migration 4 walks that list and these tables do not exist
+ * when it runs; replacing an earlier import counts both lists.
+ */
+export const TABLES_THE_AUTHORS_HAND_WRITES = ['waypoint_rewordings', 'run_edits', 'entry_edits'] as const;
+
 /** The marks migration 4 gives the rows stored before marks were kept. The sequence starts above them. */
 export const IMPORTS_OWN_MARK = 1;
 export const WRITTEN_LATER_MARK = 2;
@@ -346,6 +353,57 @@ export const MIGRATIONS: Migration[] = [
         primary key (thread_id, scene_id)
       )`,
       `create index thread_touches_by_scene on thread_touches (scene_id)`,
+    ],
+  },
+  {
+    number: 6,
+    name: "the author's hand",
+    statements: [
+      // A waypoint the author withdrew is kept, dated to the newest standing scene when it was withdrawn.
+      `alter table waypoints add column withdrawn_in_scene_id uuid references scenes(id)`,
+      // The earlier values of what the author changes in place are kept as rows, oldest first. Each
+      // carries a write mark, so an author's change after an import stops that import being replaced.
+      // after_scene_id dates the change to the newest standing scene when it was made, or null.
+      `create table waypoint_rewordings (
+        ${KEEPS_ITS_OWN_ID},
+        run_id uuid not null references runs(id) on delete cascade,
+        waypoint_id uuid not null references waypoints(id) on delete cascade,
+        earlier_text text not null,
+        later_text text not null,
+        after_scene_id uuid references scenes(id),
+        ${WHEN_WRITTEN},
+        ${ORDER_WRITTEN},
+        write_mark bigint not null default nextval('${WRITE_MARKS}')
+      )`,
+      `create index waypoint_rewordings_by_run on waypoint_rewordings (run_id, written_order)`,
+      `create table run_edits (
+        ${KEEPS_ITS_OWN_ID},
+        run_id uuid not null references runs(id) on delete cascade,
+        field text not null check (field in ('title', 'setting', 'register', 'status')),
+        earlier_value text not null,
+        later_value text not null,
+        after_scene_id uuid references scenes(id),
+        ${WHEN_WRITTEN},
+        ${ORDER_WRITTEN},
+        write_mark bigint not null default nextval('${WRITE_MARKS}')
+      )`,
+      `create index run_edits_by_run on run_edits (run_id, written_order)`,
+      `create table entry_edits (
+        ${KEEPS_ITS_OWN_ID},
+        run_id uuid not null references runs(id) on delete cascade,
+        entry_id uuid not null references entries(id) on delete cascade,
+        field text not null check (field in ('name', 'alsoKnownAs', 'pronoun', 'kind', 'visibility')),
+        earlier_value text not null,
+        later_value text not null,
+        after_scene_id uuid references scenes(id),
+        ${WHEN_WRITTEN},
+        ${ORDER_WRITTEN},
+        write_mark bigint not null default nextval('${WRITE_MARKS}')
+      )`,
+      `create index entry_edits_by_run on entry_edits (run_id, written_order)`,
+      // A touch the author made by hand. A scene's save never writes over one: where a take touches
+      // the same thread at the same scene, the author's note is kept and the take's is left out.
+      `alter table thread_touches add column by_author boolean not null default false`,
     ],
   },
 ];

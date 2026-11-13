@@ -165,6 +165,8 @@ export interface ThreadTouchesTable {
   note: string;
   /** The scene whose save wrote this touch; null where an import wrote it. */
   written_by_scene_id: string | null;
+  /** True where the author touched the thread by hand; a scene's save never writes over such a touch. */
+  by_author: Generated<boolean>;
   created_at: CreatedAt;
   written_order: WrittenOrder;
 }
@@ -176,9 +178,52 @@ export interface WaypointsTable {
   reached_in_scene_id: string | null;
   /** The scene whose save reached it, so a redo of that scene un-reaches it. Null where an import dated it. */
   reached_by_scene_id: Generated<string | null>;
+  /** The newest standing scene when the author withdrew it; null while it stands. */
+  withdrawn_in_scene_id: Generated<string | null>;
   created_at: CreatedAt;
   write_mark: WriteMark;
   written_order: WrittenOrder;
+}
+
+/** One rewording of a waypoint by the author: what it said before and after. */
+export interface WaypointRewordingsTable {
+  id: string;
+  run_id: string;
+  waypoint_id: string;
+  earlier_text: string;
+  later_text: string;
+  /** The newest standing scene when the words changed, or null where the run had none. */
+  after_scene_id: string | null;
+  created_at: CreatedAt;
+  written_order: WrittenOrder;
+  write_mark: WriteMark;
+}
+
+/** One change the author made to a run's title, setting, register or status. */
+export interface RunEditsTable {
+  id: string;
+  run_id: string;
+  field: string;
+  earlier_value: string;
+  later_value: string;
+  after_scene_id: string | null;
+  created_at: CreatedAt;
+  written_order: WrittenOrder;
+  write_mark: WriteMark;
+}
+
+/** One change the author made to an entry's name, other names, pronoun, kind or visibility. */
+export interface EntryEditsTable {
+  id: string;
+  run_id: string;
+  entry_id: string;
+  field: string;
+  earlier_value: string;
+  later_value: string;
+  after_scene_id: string | null;
+  created_at: CreatedAt;
+  written_order: WrittenOrder;
+  write_mark: WriteMark;
 }
 
 export interface JourneyLegsTable {
@@ -228,6 +273,9 @@ export interface Database {
   thread_about_entries: ThreadAboutEntriesTable;
   thread_touches: ThreadTouchesTable;
   waypoints: WaypointsTable;
+  waypoint_rewordings: WaypointRewordingsTable;
+  run_edits: RunEditsTable;
+  entry_edits: EntryEditsTable;
   journey_legs: JourneyLegsTable;
   collisions: CollisionsTable;
   timeweft_migrations: MigrationsTable;

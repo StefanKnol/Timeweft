@@ -246,7 +246,8 @@ export function sceneInFull(snapshot: RunSnapshot, number: number): SceneInFull 
     entriesIntroduced: snapshot.entries.filter((entry) => entry.introducedInSceneId === scene.id).sort(byCreation),
     factsEstablished: snapshot.facts.filter((fact) => fact.fromSceneId === scene.id).sort(byEntryName),
     notes: snapshot.notes.filter((note) => note.sceneId === scene.id).sort(byEntryName),
-    rulings: snapshot.rulings.filter((ruling) => ruling.sceneId === scene.id).sort((left, right) => left.number - right.number || byCreation(left, right)),
+    // A ruling given here and withdrawn since is no longer told to a story, so the scene leaves it out.
+    rulings: snapshot.rulings.filter((ruling) => ruling.sceneId === scene.id && ruling.withdrawnInSceneId === null).sort((left, right) => left.number - right.number || byCreation(left, right)),
     threadsOpened: snapshot.threads.filter((thread) => thread.openedInSceneId === scene.id).sort(byCreation),
     threadsClosed: snapshot.threads.filter((thread) => thread.closedInSceneId === scene.id).sort(byCreation),
     threadsTouched: snapshot.threads.filter((thread) => thread.closedInSceneId !== scene.id

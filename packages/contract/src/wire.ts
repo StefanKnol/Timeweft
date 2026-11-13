@@ -16,10 +16,10 @@
  * each item of a list: a client may offer null beside every optional parameter, and no parameter
  * here gives null a meaning. Over the web a null is refused, as any wrong value is.
  */
-import type { Briefing, EntryLookup, FoundItem, RunCounts, RunListing, SavedScene } from './answers.ts';
+import type { Briefing, EntryLookup, EntryWritten, FoundItem, RunCounts, RunListing, SavedScene } from './answers.ts';
 import type {
   CollisionRecord, EntryNoteRecord, EntryRecord, FactRecord, JourneyLegRecord, RulingRecord, RunRecord, RunSnapshot,
-  SceneRecord, ThreadRecord,
+  SceneRecord, ThreadRecord, WaypointRecord,
 } from './records.ts';
 
 export const OPERATION_ROUTE_PREFIX = '/api/operations/';
@@ -65,6 +65,20 @@ export interface AnswerByOperation {
   list_threads: ThreadRecord[];
   record_ruling: RulingRecord;
   state_fact: FactRecord;
+  end_fact: FactRecord;
+  withdraw_ruling: RulingRecord;
+  add_waypoint: WaypointRecord;
+  reword_waypoint: WaypointRecord;
+  mark_waypoint_reached: WaypointRecord;
+  withdraw_waypoint: WaypointRecord;
+  edit_run: RunRecord;
+  open_thread: ThreadRecord;
+  touch_thread: ThreadRecord;
+  close_thread: ThreadRecord;
+  add_entry: EntryWritten;
+  edit_entry: EntryWritten;
+  rename_entry: EntryWritten;
+  set_entry_visibility: EntryWritten;
   list_collisions: CollisionRecord[];
   settle_collision: CollisionRecord;
   read_run: RunSnapshot;

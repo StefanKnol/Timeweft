@@ -7,14 +7,19 @@
  * it was not given.
  *
  * Waypoints are served to a story. They are never shown in the narration, but they are what the
- * writer steers by, and a story chat is the writer.
+ * writer steers by, and a story chat is the writer. A withdrawn one is not.
+ *
+ * What the author changed in place (the run, an entry, a waypoint's words) keeps its earlier values
+ * as history rows. Those are the author's: a story reads each thing as it is now.
  */
 import type { Kysely } from 'kysely';
 import type { ClockReading, RunSnapshot, ThreadRecord } from '@timeweft/contract';
 import type { Database } from './database.ts';
+import { normaliseName } from './names.ts';
 import {
-  clockFromRow, collisionFromRow, entryFromRow, factFromRow, legFromRow, noteFromRow,
-  rulingFromRow, runFromRow, sceneFromRow, threadFromRow, waypointFromRow, type RunRow,
+  clockFromRow, collisionFromRow, entryEditFromRow, entryFromRow, factFromRow, legFromRow, noteFromRow,
+  rulingFromRow, runEditFromRow, runFromRow, sceneFromRow, threadFromRow, waypointFromRow,
+  waypointRewordingFromRow, type RunRow,
 } from './rows.ts';
 
 export async function readWholeRun(database: Kysely<Database>, run: RunRow): Promise<RunSnapshot> {
@@ -38,6 +43,9 @@ export async function readWholeRun(database: Kysely<Database>, run: RunRow): Pro
   const waypoints = await database.selectFrom('waypoints').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
   const legs = await database.selectFrom('journey_legs').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
   const collisions = await database.selectFrom('collisions').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
+  const runEdits = await database.selectFrom('run_edits').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
+  const entryEdits = await database.selectFrom('entry_edits').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
+  const waypointRewordings = await database.selectFrom('waypoint_rewordings').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
 
   const readingsByScene = groupBy(readings, (reading) => reading.scene_id, (reading): ClockReading => ({
     clockId: reading.clock_id, count: reading.count, partOfDay: reading.part_of_day,
@@ -56,6 +64,9 @@ export async function readWholeRun(database: Kysely<Database>, run: RunRow): Pro
     waypoints: waypoints.map(waypointFromRow),
     legs: legs.map(legFromRow),
     collisions: collisions.map(collisionFromRow),
+    runEdits: runEdits.map(runEditFromRow),
+    entryEdits: entryEdits.map(entryEditFromRow),
+    waypointRewordings: waypointRewordings.map(waypointRewordingFromRow),
   };
 }
 
@@ -101,7 +112,9 @@ function groupBy<Row, Value>(rows: Row[], keyOf: (row: Row) => string, valueOf: 
 /**
  * What a story may be served of a whole run. Struck scenes and everything they established are
  * gone; author-only entries, facts and notes are gone; anything belonging to or pointing at an
- * entry that is not served is gone or has the pointer taken out; collisions are the author's.
+ * entry that is not served is gone or has the pointer taken out; a journey leg naming an author-only
+ * entry is gone; collisions, the author's history
+ * rows and withdrawn waypoints are the author's.
  */
 export function filterForStory(whole: RunSnapshot): RunSnapshot {
   const standingSceneIds = new Set(whole.scenes.filter((scene) => scene.status === 'standing').map((scene) => scene.id));
@@ -111,6 +124,16 @@ export function filterForStory(whole: RunSnapshot): RunSnapshot {
   const entries = whole.entries.filter((entry) => entry.visibility === 'open' && !isStruck(entry.introducedInSceneId));
   const servedEntryIds = new Set(entries.map((entry) => entry.id));
   const isServed = (entryId: string | null): boolean => entryId === null || servedEntryIds.has(entryId);
+  // A journey leg names its places by text, not by id, so a leg is kept only where neither end is a
+  // name of an author-only entry that no served entry also goes by: otherwise the leg would tell a
+  // story the hidden entry's name.
+  const namesOf = (entry: { name: string; alsoKnownAs: string[] }): string[] => [entry.name, ...entry.alsoKnownAs].map(normaliseName);
+  const servedNames = new Set(entries.flatMap(namesOf));
+  const hiddenNames = new Set(whole.entries.filter((entry) => entry.visibility !== 'open').flatMap(namesOf));
+  const namesAHiddenEntry = (place: string): boolean => {
+    const name = normaliseName(place);
+    return hiddenNames.has(name) && !servedNames.has(name);
+  };
 
   return {
     run: whole.run,
@@ -130,9 +153,13 @@ export function filterForStory(whole: RunSnapshot): RunSnapshot {
     threads: whole.threads
       .filter((thread) => !isStruck(thread.openedInSceneId))
       .map((thread) => ({ ...thread, aboutEntryIds: thread.aboutEntryIds.filter((id) => servedEntryIds.has(id)) })),
-    waypoints: whole.waypoints.map((waypoint) =>
-      (isStruck(waypoint.reachedInSceneId) ? { ...waypoint, reachedInSceneId: null } : waypoint)),
-    legs: whole.legs.filter((leg) => !isStruck(leg.sceneId)),
+    waypoints: whole.waypoints
+      .filter((waypoint) => waypoint.withdrawnInSceneId === null)
+      .map((waypoint) => (isStruck(waypoint.reachedInSceneId) ? { ...waypoint, reachedInSceneId: null } : waypoint)),
+    legs: whole.legs.filter((leg) => !isStruck(leg.sceneId) && !namesAHiddenEntry(leg.fromPlace) && !namesAHiddenEntry(leg.toPlace)),
     collisions: [],
+    runEdits: [],
+    entryEdits: [],
+    waypointRewordings: [],
   };
 }

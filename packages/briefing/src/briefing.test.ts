@@ -178,6 +178,18 @@ describe('what the briefing never serves', () => {
     assert.ok(!text.includes('The lantern was lost.'));
   });
 
+  it('never serves a withdrawn waypoint, even where the snapshot still holds it', () => {
+    const run = millerRun();
+    run.waypoints.push({
+      id: 'waypoint-withdrawn', runId: 'run-demo', text: 'The mill burns down.', reachedInSceneId: null,
+      withdrawnInSceneId: 'scene-3', createdAt: run.waypoints[0]!.createdAt,
+    });
+    const text = buildBriefing(run, { upcoming: [], budgetBytes: 20_000 }).text;
+    assert.ok(text.includes('The autumn fair at the ford.'));
+    assert.ok(!text.includes('The mill burns down.'));
+    assert.ok(!text.includes('waypoint-withdrawn'));
+  });
+
   it('never serves a reached waypoint, nor a closed thread', () => {
     const text = buildBriefing(millerRun(), { upcoming: [], budgetBytes: 20_000 }).text;
     assert.ok(text.includes('The autumn fair at the ford.'));

@@ -17,18 +17,25 @@ export function normaliseName(name: string): string {
 
 export class NameIndex<Entry extends NameableEntry> {
   private readonly entriesByName = new Map<string, Entry[]>();
+  private readonly entriesById = new Map<string, Entry>();
 
   constructor(entries: Iterable<Entry> = []) {
     for (const entry of entries) this.add(entry);
   }
 
   add(entry: Entry): void {
+    this.entriesById.set(entry.id, entry);
     const names = new Set([entry.name, ...entry.alsoKnownAs].map(normaliseName).filter((name) => name !== ''));
     for (const name of names) {
       const holders = this.entriesByName.get(name) ?? [];
       if (!holders.some((holder) => holder.id === entry.id)) holders.push(entry);
       this.entriesByName.set(name, holders);
     }
+  }
+
+  /** The entry with this id, or null where none in the index has it. Ids are the keys; names are not. */
+  byId(id: string): Entry | null {
+    return this.entriesById.get(id) ?? null;
   }
 
   /** Every entry answering to the name. */

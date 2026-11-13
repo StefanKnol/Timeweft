@@ -433,7 +433,9 @@ function whereThingsStandSection(index: RunIndex): SectionPlan {
 }
 
 function waypointsSection(index: RunIndex): SectionPlan {
-  const waypoints = index.snapshot.waypoints.filter((waypoint) => waypoint.reachedInSceneId === null);
+  // A waypoint the author withdrew is kept on the author's pages and never told to a story, even
+  // where a snapshot handed in still holds it. Its text is always its newest wording.
+  const waypoints = index.snapshot.waypoints.filter((waypoint) => waypoint.reachedInSceneId === null && waypoint.withdrawnInSceneId === null);
   const pieces = waypoints.map((waypoint, waypointIndex) =>
     makePiece(`- Waypoint ${waypoint.id}: `, onOneLine(waypoint.text), { priority: waypointIndex }));
   if (pieces.length === 0) pieces.push(makePiece('', 'None.', { priority: 0, isItem: false }));

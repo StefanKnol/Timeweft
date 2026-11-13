@@ -127,6 +127,78 @@ test('every operation runs end to end', async () => {
   assert.equal(whole.scenes.filter((scene) => scene.status === 'struck').length, 1, 'the author sees the struck take');
   assert.equal(whole.collisions.length, 1);
 
+  // The author's hand, each act once, on the run as it now stands: three standing scenes.
+  const newestScene = whole.scenes.filter((scene) => scene.status === 'standing').at(-1)!;
+  const firstScene = whole.scenes.find((scene) => scene.status === 'standing' && scene.number === 1)!;
+  const lantern = whole.entries.find((entry) => entry.name === 'the lantern')!;
+  const ferryThread = whole.threads.find((thread) => thread.text === 'Who cut the ferry rope?')!;
+
+  const waypoint = await answerOf('add_waypoint', { run: slug, text: 'The miller reaches the far bank.' });
+  ran.add('add_waypoint');
+  assert.equal(waypoint.reachedInSceneId, null);
+  assert.equal(waypoint.withdrawnInSceneId, null);
+
+  const reworded = await answerOf('reword_waypoint', { waypoint: waypoint.id, text: 'The miller reaches the far bank by night.' });
+  ran.add('reword_waypoint');
+  assert.equal(reworded.id, waypoint.id, 'a reworded waypoint keeps its id');
+  assert.equal(reworded.text, 'The miller reaches the far bank by night.');
+
+  const reached = await answerOf('mark_waypoint_reached', { waypoint: waypoint.id, scene: 1 });
+  ran.add('mark_waypoint_reached');
+  assert.equal(reached.reachedInSceneId, firstScene.id, 'reached at the scene the author named');
+
+  const withdrawnWaypoint = await answerOf('withdraw_waypoint', { waypoint: begun.waypoints[0]!.id });
+  ran.add('withdraw_waypoint');
+  assert.equal(withdrawnWaypoint.withdrawnInSceneId, newestScene.id);
+
+  const edited = await answerOf('edit_run', { run: slug, register: 'Plain past tense.' });
+  ran.add('edit_run');
+  assert.equal(edited.register, 'Plain past tense.');
+  assert.equal(edited.title, 'The Ford', 'what was not given stays');
+
+  const opened = await answerOf('open_thread', { run: slug, text: 'Where did the water come from?', aboutEntryIds: [lantern.id] });
+  ran.add('open_thread');
+  assert.equal(opened.openedInSceneId, newestScene.id);
+  assert.deepEqual(opened.aboutEntryIds, [lantern.id]);
+
+  const touched = await answerOf('touch_thread', { thread: ferryThread.id, note: 'The rope was found frayed.' });
+  ran.add('touch_thread');
+  assert.ok(touched.touches.some((touch) => touch.sceneId === newestScene.id && touch.note === 'The rope was found frayed.'));
+
+  const closed = await answerOf('close_thread', { thread: opened.id, resolution: 'From the hills.' });
+  ran.add('close_thread');
+  assert.equal(closed.closedInSceneId, newestScene.id);
+  assert.equal(closed.resolution, 'From the hills.');
+
+  const added = await answerOf('add_entry', { run: slug, name: 'Hild the baker', kind: 'person', pronoun: 'she', visibility: 'open' });
+  ran.add('add_entry');
+  assert.equal(added.entry.source, 'author');
+  assert.equal(added.entry.introducedInSceneId, null);
+  assert.deepEqual(added.cautions, []);
+
+  const entryEdited = await answerOf('edit_entry', { entry: added.entry.id, alsoKnownAs: ['the baker'] });
+  ran.add('edit_entry');
+  assert.deepEqual(entryEdited.entry.alsoKnownAs, ['the baker']);
+
+  const renamed = await answerOf('rename_entry', { entry: added.entry.id, name: 'Hild of the bakehouse' });
+  ran.add('rename_entry');
+  assert.equal(renamed.entry.name, 'Hild of the bakehouse');
+  assert.ok(renamed.entry.alsoKnownAs.includes('Hild the baker'), 'the old name stays among its other names');
+
+  const hidden = await answerOf('set_entry_visibility', { entry: added.entry.id, visibility: 'author-only' });
+  ran.add('set_entry_visibility');
+  assert.equal(hidden.entry.visibility, 'author-only');
+
+  const ended = await answerOf('end_fact', { fact: fact.id });
+  ran.add('end_fact');
+  assert.equal(ended.id, fact.id);
+  assert.equal(ended.untilSceneId, newestScene.id);
+
+  const withdrawnRuling = await answerOf('withdraw_ruling', { ruling: ruling.id });
+  ran.add('withdraw_ruling');
+  assert.equal(withdrawnRuling.withdrawnInSceneId, newestScene.id);
+  assert.equal(withdrawnRuling.text, 'No crossings after dark.', 'kept word for word');
+
   const imported = await answerOf('import_run', {
     slug: 'the-weir-mill', title: 'The Weir Mill',
     files: { log: '# The Weir Mill - Log\n\n## Scene 1: The wheel\n**When:** the first morning\nThe miller turns the wheel.\n' },

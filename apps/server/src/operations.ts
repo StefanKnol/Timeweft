@@ -74,6 +74,22 @@ export const OPERATION_HANDLERS: { [Name in OperationName]: Handler<Name> } = {
   },
   record_ruling: (store, input) => store.recordRuling(input),
   state_fact: (store, input) => store.stateFact(input),
+  // The author's hand: each act goes to its own door in the store, which dates it by the rule in
+  // docs/decisions/0003-the-authors-hand.md and refuses what that rule refuses.
+  end_fact: (store, input) => store.endFact(input),
+  withdraw_ruling: (store, input) => store.withdrawRuling(input),
+  add_waypoint: (store, input) => store.addWaypoint(input),
+  reword_waypoint: (store, input) => store.rewordWaypoint(input),
+  mark_waypoint_reached: (store, input) => store.markWaypointReached(input),
+  withdraw_waypoint: (store, input) => store.withdrawWaypoint(input),
+  edit_run: (store, input) => store.editRun(input),
+  open_thread: (store, input) => store.openThread(input),
+  touch_thread: (store, input) => store.touchThread(input),
+  close_thread: (store, input) => store.closeThread(input),
+  add_entry: (store, input) => store.addEntry(input),
+  edit_entry: (store, input) => store.editEntry(input),
+  rename_entry: (store, input) => store.renameEntry(input),
+  set_entry_visibility: (store, input) => store.setEntryVisibility(input),
   list_collisions: async (store, input) => {
     const snapshot = await snapshotForOperation(store, 'list_collisions', input.run);
     return snapshot.collisions.filter((collision) => !input.waitingOnly || collision.state === 'waiting');
