@@ -25,7 +25,7 @@ function millerRunWithLaterScenes(): RunSnapshot {
 }
 
 describe('the open threads, as a fresh chat meets them', () => {
-  it('ranks threads about the upcoming entries first, then by the scene they were opened in, newest first', () => {
+  it('ranks threads about the upcoming entries first, then, where none was touched later, by the scene they were opened in, newest first', () => {
     const snapshot = millerRunWithLaterScenes();
     // All written in one batch, so that only the opening scene and the written order can tell them apart.
     const batch = momentAfter(1000);
@@ -60,15 +60,69 @@ describe('the open threads, as a fresh chat meets them', () => {
   });
 });
 
+describe('a thread kept alive by later scenes', () => {
+  /** Opened in scene 1 and touched in scene 6, beside threads opened later and never touched. */
+  function runWithAnOldThreadStillMoving(): RunSnapshot {
+    const snapshot = millerRunWithLaterScenes();
+    const batch = momentAfter(1000);
+    snapshot.threads = [
+      thread({ id: 'aa-old-and-moving', text: 'Who owes the miller for the grain?', openedInSceneId: 'scene-1', createdAt: batch,
+        touches: [{ sceneId: 'scene-4', note: 'Asked at the bridge.' }, { sceneId: 'scene-6', note: 'Half paid in bread.' }],
+        lastTouchedInSceneId: 'scene-6' }),
+      thread({ id: 'bb-opened-later', text: 'Who left bread on the weir?', openedInSceneId: 'scene-5', createdAt: batch }),
+      thread({ id: 'cc-touched-by-a-redone-take', text: 'Why is the bakery shut?', openedInSceneId: 'scene-3', createdAt: batch,
+        touches: [{ sceneId: 'scene-7-redone', note: 'A take that was redone.' }], lastTouchedInSceneId: 'scene-7-redone' }),
+      thread({ id: 'dd-about-the-miller', text: 'Will the millstone crack?', openedInSceneId: 'scene-2', aboutEntryIds: ['entry-miller'], createdAt: batch }),
+    ];
+    snapshot.scenes.push(scene({ id: 'scene-7-redone', number: 7, title: 'A take redone', status: 'struck' }));
+    return snapshot;
+  }
+
+  it('ranks by the scene it was last touched in, within each group, and says when that was with what moved', () => {
+    const threads = sectionTextOf(buildBriefing(runWithAnOldThreadStillMoving(), { upcoming: ['Wenna the miller'], budgetBytes: 20_000 }), 'Open threads');
+    const order = ['millstone', 'owes the miller', 'bread on the weir', 'bakery shut'].map((words) => threads.indexOf(words));
+    assert.ok(order.every((position) => position >= 0), threads);
+    assert.deepEqual([...order].sort((left, right) => left - right), order, threads);
+    assert.match(threads, /- Thread aa-old-and-moving \(last touched scene 6\): Who owes the miller for the grain\? \(latest: Half paid in bread\.\)/);
+    assert.match(threads, /- Thread bb-opened-later: Who left bread on the weir\?\n/, 'a thread last touched where it opened says nothing more');
+    assert.doesNotMatch(threads, /A take that was redone|scene 7/, "a struck take's touch never counts, even where a record still names it");
+  });
+
+  it('keeps when a thread was last touched in a line cut short', () => {
+    const snapshot = runWithAnOldThreadStillMoving();
+    snapshot.threads[0] = { ...snapshot.threads[0]!, text: `Who owes the miller for the grain? ${'The baker says the debt is older than the weir. '.repeat(60)}` };
+    const threads = sectionTextOf(buildBriefing(snapshot, { upcoming: [], budgetBytes: 4_000 }), 'Open threads');
+    assert.match(threads, /- Thread aa-old-and-moving \(last touched scene 6\): Who owes the miller/, threads);
+    assert.ok(threads.includes('[cut]') || threads.includes('middle left out'), `the line was not shortened, so this proves nothing:\n${threads}`);
+  });
+
+  it('shows a very long thread by its opening and its ending, so the threads after it are still shown', () => {
+    const snapshot = runWithAnOldThreadStillMoving();
+    snapshot.threads[0] = { ...snapshot.threads[0]!, text: `Who owes the miller for the grain? ${'The baker says the debt is older than the weir. '.repeat(400)}Settled at the ford in bread.` };
+    const threads = sectionTextOf(buildBriefing(snapshot, { upcoming: [], budgetBytes: 20_000 }), 'Open threads');
+    assert.match(threads, /Who owes the miller for the grain\?/);
+    assert.match(threads, /middle left out/);
+    assert.match(threads, /Settled at the ford in bread\./, 'the newest end of the thread is what a fresh chat needs');
+    for (const words of ['bread on the weir', 'bakery shut', 'millstone']) assert.ok(threads.includes(words), `the long thread crowded out "${words}":\n${threads.slice(0, 600)}`);
+  });
+
+  it('lists threads in the order the briefing ranks them, closed ones after every open one', () => {
+    const snapshot = runWithAnOldThreadStillMoving();
+    snapshot.threads.push(thread({ id: 'ee-closed', text: 'Was the gate shut?', openedInSceneId: 'scene-1', closedInSceneId: 'scene-6', resolution: 'It was.', createdAt: momentAfter(1000) }));
+    assert.deepEqual(threadsOpenFor(snapshot, { aboutEntryIds: [], includeClosed: true }).map((each) => each.id),
+      ['aa-old-and-moving', 'bb-opened-later', 'cc-touched-by-a-redone-take', 'dd-about-the-miller', 'ee-closed']);
+  });
+});
+
 describe('the threads a reader lists', () => {
-  it('keeps two threads of one scene and one batch in the order they were written, never by id', () => {
+  it('puts the later written of two threads of one scene and one batch first, as the briefing does, never by id', () => {
     const snapshot = millerRun();
     const batch = momentAfter(1000);
     snapshot.threads = [
-      thread({ id: 'zz-written-first', text: 'Who mends the nets?', openedInSceneId: 'scene-3', createdAt: batch }),
-      thread({ id: 'aa-written-second', text: 'Who feeds the geese?', openedInSceneId: 'scene-3', createdAt: batch }),
+      thread({ id: 'aa-written-first', text: 'Who mends the nets?', openedInSceneId: 'scene-3', createdAt: batch }),
+      thread({ id: 'zz-written-second', text: 'Who feeds the geese?', openedInSceneId: 'scene-3', createdAt: batch }),
     ];
-    assert.deepEqual(threadsOpenFor(snapshot, { aboutEntryIds: [], includeClosed: false }).map((each) => each.id), ['zz-written-first', 'aa-written-second']);
+    assert.deepEqual(threadsOpenFor(snapshot, { aboutEntryIds: [], includeClosed: false }).map((each) => each.id), ['zz-written-second', 'aa-written-first']);
   });
 });
 
@@ -128,5 +182,20 @@ describe('a last seen fact the trail has gone on from', () => {
         assert.ok(Buffer.byteLength(briefing.text, 'utf8') <= budgetBytes, `${budgetBytes}: ${Buffer.byteLength(briefing.text, 'utf8')}`);
       }
     }
+  });
+});
+
+describe('two threads last touched in one scene', () => {
+  it('puts the one opened in the newer scene first, before the written order is asked', () => {
+    const snapshot = millerRunWithLaterScenes();
+    const batch = momentAfter(1000);
+    snapshot.threads = [
+      thread({ id: 'bb-opened-in-five', text: 'Who left bread on the weir?', openedInSceneId: 'scene-5', createdAt: batch }),
+      thread({ id: 'aa-opened-in-two', text: 'Who owes the miller for the grain?', openedInSceneId: 'scene-2', createdAt: batch,
+        touches: [{ sceneId: 'scene-5', note: 'Asked at the weir.' }], lastTouchedInSceneId: 'scene-5' }),
+    ];
+    assert.deepEqual(threadsOpenFor(snapshot, { aboutEntryIds: [], includeClosed: false }).map((each) => each.id), ['bb-opened-in-five', 'aa-opened-in-two']);
+    const threads = sectionTextOf(buildBriefing(snapshot, { upcoming: [], budgetBytes: 20_000 }), 'Open threads');
+    assert.ok(threads.indexOf('bread on the weir') >= 0 && threads.indexOf('bread on the weir') < threads.indexOf('owes the miller'), threads);
   });
 });

@@ -9,7 +9,8 @@
  * is taken back by closing it at the struck scene itself: a fact it started holds from that scene
  * until that scene, a ruling it gave is withdrawn at it, a thread it opened is closed at it. None
  * of those ever reads as in force. What the take closed is opened again, and anything the author
- * did after it that named it (a fact stated as of that scene) is moved onto the new take.
+ * did after it that named it (a fact stated as of that scene), or that an import dated to it (a
+ * thread's closing or touch), is moved onto the new take.
  */
 import { randomUUID } from 'node:crypto';
 import { sql, type Kysely } from 'kysely';
@@ -23,9 +24,9 @@ import { applyMigrations } from './migrations.ts';
 import { NameIndex, normaliseName, normaliseProperty } from './names.ts';
 import {
   collisionFromRow, entryFromRow, factFromRow, rulingFromRow, runFromRow, sceneFromRow,
-  threadFromRow, type EntryRow, type FactRow, type RunRow, type SceneRow,
+  type EntryRow, type FactRow, type RunRow, type SceneRow,
 } from './rows.ts';
-import { filterForStory, readWholeRun } from './snapshot.ts';
+import { filterForStory, readThreadRecords, readWholeRun } from './snapshot.ts';
 import { importRunInto } from './import.ts';
 import { markRunAsImported, replaceImportedRunIn } from './replace-imported-run.ts';
 import { exactCount, looksLikeAnId } from './checks.ts';
@@ -493,7 +494,7 @@ async function writeScene(database: Kysely<Database>, run: RunRow, input: SceneI
     rulingsRecorded.push(await writeRuling(database, run.id, { ...rulingInput, about: rulingInput.about }, names, sceneId, sceneId));
   }
 
-  const threadsOpened: ThreadRecord[] = [];
+  const threadIdsOpened: string[] = [];
   for (const threadInput of input.threadsOpened) {
     const aboutIds = uniqueIds(threadInput.about.map((name) => names.resolve(name, 'in a thread').id));
     const row = await database.insertInto('threads').values({
@@ -504,21 +505,31 @@ async function writeScene(database: Kysely<Database>, run: RunRow, input: SceneI
       await database.insertInto('thread_about_entries')
         .values(aboutIds.map((entryId, position) => ({ thread_id: row.id, entry_id: entryId, position }))).execute();
     }
-    threadsOpened.push(threadFromRow(row, aboutIds));
+    threadIdsOpened.push(row.id);
   }
 
-  const threadsClosed: ThreadRecord[] = [];
+  // Touches come before closings, so a scene may move a thread on and close it in one save. A
+  // closing counts as a touch by itself; the scene that closed it is read as its last touch.
+  const threadIdsTouched: string[] = [];
+  for (const touching of input.threadsTouched) {
+    const thread = await openThreadOfThisRun(database, run.id, touching.thread, 'touched');
+    if (threadIdsTouched.includes(thread.id)) throw new Refusal(`The thread "${thread.text}" is touched twice in one scene. Name it once, with one note.`);
+    // A redo has already moved onto this take any touch an import dated to the scene it redoes; where
+    // the take touches the same thread, the take's own note and ownership replace it.
+    await database.insertInto('thread_touches')
+      .values({ thread_id: thread.id, scene_id: sceneId, note: touching.note.trim(), written_by_scene_id: sceneId })
+      .onConflict((conflict) => conflict.columns(['thread_id', 'scene_id']).doUpdateSet({ note: touching.note.trim(), written_by_scene_id: sceneId }))
+      .execute();
+    threadIdsTouched.push(thread.id);
+  }
+
+  const threadIdsClosed: string[] = [];
   for (const closing of input.threadsClosed) {
-    const thread = looksLikeAnId(closing.thread)
-      ? await database.selectFrom('threads').selectAll().where('id', '=', closing.thread).where('run_id', '=', run.id).executeTakeFirst()
-      : undefined;
-    if (thread === undefined) throw new Refusal(`This run has no thread with the id "${closing.thread}".`);
-    if (thread.closed_in_scene_id !== null) throw new Refusal(`The thread "${thread.text}" is closed already.`);
-    const closed = await database.updateTable('threads')
+    const thread = await openThreadOfThisRun(database, run.id, closing.thread, 'closed');
+    await database.updateTable('threads')
       .set({ closed_in_scene_id: sceneId, resolution: closing.resolution, closed_by_scene_id: sceneId })
-      .where('id', '=', thread.id).returningAll().executeTakeFirstOrThrow();
-    const about = await database.selectFrom('thread_about_entries').select('entry_id').where('thread_id', '=', thread.id).orderBy('position').execute();
-    threadsClosed.push(threadFromRow(closed, about.map((row) => row.entry_id)));
+      .where('id', '=', thread.id).execute();
+    threadIdsClosed.push(thread.id);
   }
 
   for (const waypointId of input.waypointsReached) {
@@ -541,10 +552,33 @@ async function writeScene(database: Kysely<Database>, run: RunRow, input: SceneI
 
   if (struck !== null) await settleEntriesTheStruckTakeIntroduced(database, struck.id);
 
+  const threadsAsTheyStand = await readThreadRecords(database, run.id, uniqueIds([...threadIdsOpened, ...threadIdsTouched, ...threadIdsClosed]));
+  const threadsIn = (ids: string[]): ThreadRecord[] => ids.map((id) => threadsAsTheyStand.find((thread) => thread.id === id)!);
   return {
     scene: sceneFromRow(sceneRow, readings),
-    entriesAdded, factsWritten, factsUnchanged, rulingsRecorded, threadsOpened, threadsClosed, collisions, cautions,
+    entriesAdded, factsWritten, factsUnchanged, rulingsRecorded,
+    threadsOpened: threadsIn(threadIdsOpened),
+    threadsClosed: threadsIn(threadIdsClosed),
+    threadsTouched: threadsIn(threadIdsTouched.filter((id) => !threadIdsClosed.includes(id))),
+    collisions, cautions,
   };
+}
+
+/**
+ * An open thread of this run, named by its id, for a scene to touch or close. A thread that is not
+ * this run's, or no thread at all, or one closed already, is refused by name.
+ */
+async function openThreadOfThisRun(database: Kysely<Database>, runId: string, threadId: string, doing: 'touched' | 'closed') {
+  const thread = looksLikeAnId(threadId)
+    ? await database.selectFrom('threads').selectAll().where('id', '=', threadId).where('run_id', '=', runId).executeTakeFirst()
+    : undefined;
+  if (thread === undefined) throw new Refusal(`This run has no thread with the id "${threadId}".`);
+  if (thread.closed_in_scene_id !== null) {
+    throw new Refusal(doing === 'closed'
+      ? `The thread "${thread.text}" is closed already.`
+      : `The thread "${thread.text}" is closed, so no scene can touch it.`);
+  }
+  return thread;
 }
 
 /**
@@ -606,6 +640,10 @@ async function moveOutsideReferencesOntoTheNewTake(database: Kysely<Database>, s
   // and carries the struck scene as its closer, which is what this leaves alone.
   await database.updateTable('threads').set({ closed_in_scene_id: newId }).where('closed_in_scene_id', '=', struckId)
     .where(sql<boolean>`closed_by_scene_id is distinct from ${struckId}`).execute();
+  // So is a touch an import dated to the struck scene: the take's save did not write it. The take's
+  // own touches stay on the struck scene, where they stop counting.
+  await database.updateTable('thread_touches').set({ scene_id: newId }).where('scene_id', '=', struckId)
+    .where(sql<boolean>`written_by_scene_id is distinct from ${struckId}`).execute();
 }
 
 /**

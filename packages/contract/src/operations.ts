@@ -87,6 +87,10 @@ const sceneInput = z.object({
   rulings: z.array(rulingInput).default([]).describe('Instructions given at this scene, kept word for word.'),
   threadsOpened: z.array(threadInput).default([]).describe('What this scene left open.'),
   threadsClosed: z.array(z.object({ thread: z.string().min(1).describe('The id of the thread.'), resolution: z.string().min(1).describe('How it closed, in a sentence.') })).default([]).describe('Threads this scene closed.'),
+  threadsTouched: z.array(z.object({
+    thread: z.string().min(1).describe('The id of an open thread of this run.'),
+    note: z.string().default('').describe('What moved, in a sentence or less. Served with the thread.'),
+  })).default([]).describe('Open threads this scene moved on without opening or closing them, so a resume ranks them as live. A thread closed here counts as touched without being named here.'),
   waypointsReached: z.array(z.string()).default([]).describe('The ids of waypoints this scene reached.'),
   legs: z.array(legInput).default([]).describe('Journeys travelled for the first time in this scene.'),
 });
@@ -152,7 +156,7 @@ export const OPERATIONS = {
     name: 'save_scene',
     title: 'Save a scene',
     description:
-      'Save a finished scene and what it established. What a story establishes is canon at once and kept with the scene it came from. One thing is held back: a fact that would replace something the author stated. That is kept as a collision for the author, and the answer says so. Give only what is new or changed; the store keeps everything said before.',
+      'Save a finished scene and what it established. What a story establishes is canon at once and kept with the scene it came from. One thing is held back: a fact that would replace something the author stated. That is kept as a collision for the author, and the answer says so. Give only what is new or changed; the store keeps everything said before. Name in threadsTouched each open thread the scene moved on without closing it, so a resume ranks it by its latest move rather than by the scene it opened in.',
     effect: 'writes',
     audience: 'story',
     input: sceneInput,
@@ -218,7 +222,7 @@ export const OPERATIONS = {
   list_threads: operation({
     name: 'list_threads',
     title: 'List threads',
-    description: 'What is still open in a run, optionally only what touches the named entries.',
+    description: 'What is still open in a run, optionally only what touches the named entries. The thread a scene moved last comes first: by the scene that last opened, touched or closed it, newest first, then by the scene it opened in, then the latest written.',
     effect: 'reads',
     audience: 'story',
     input: z.object({ run: runHandle, about: z.array(z.string()).default([]).describe('Names of entries to narrow to.'), includeClosed: z.boolean().default(false).describe('True to list closed threads as well.') }),

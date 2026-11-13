@@ -199,6 +199,14 @@ function carriesAClockCount(sentence: string, namedPrefixes: string[][]): boolea
   return namedPrefixes.some((words) => new RegExp(`\\b${words.map(escapeForRegularExpression).join('\\s+')}\\s+Day\\s+\\d+(?!\\s*=)(?!\\d|\\.\\d)`, 'i').test(sentence));
 }
 
+/** Fewest words a remainder needs to stand as a line of its own. */
+const WORDS_A_LINE_NEEDS_TO_STAND = 4;
+
+/** Whether what is left of a line is too little to say anything on its own: fewer than four words. */
+function isAFragment(text: string): boolean {
+  return (text.match(/\p{L}[\p{L}\p{N}'’-]*/gu) ?? []).length < WORDS_A_LINE_NEEDS_TO_STAND;
+}
+
 /**
  * The Clock section holds four kinds of bullet, each read by what it says:
  *
@@ -216,7 +224,9 @@ function carriesAClockCount(sentence: string, namedPrefixes: string[][]): boolea
  * - Any other bullet is a standing line about the run. Its sentences that carry a count on a kept
  *   clock ("seventy days since the eve, day +70") were true when written and are left out, said
  *   once in `unplaced`, since the scenes' readings carry the clocks and an old count beside them
- *   contradicts the present. The rest of it goes to the run's setting, where it does not age.
+ *   contradicts the present. The rest of it goes to the run's setting, where it does not age. A
+ *   bullet that lost a sentence loses its label too, since the label named what the count said;
+ *   where what is left is only a fragment (fewer than four words) it is said in `unplaced` instead.
  */
 function readClockSection(section: Section, read: StateRead): ClockSectionRead {
   const { bullets, strays } = bulletsOf(section.lines);
@@ -282,7 +292,18 @@ function readClockSection(section: Section, read: StateRead): ClockSectionRead {
     }
     if (kept.length === 0) continue;
     const keptText = kept.join(' ');
-    read.settingLines.push(other.label === '' ? keptText : `${other.label}: ${keptText}`);
+    if (kept.length === sentences.length) {
+      read.settingLines.push(other.label === '' ? keptText : `${other.label}: ${keptText}`);
+      continue;
+    }
+    // The label named what the removed count said ("Elapsed in run: ..."), so it no longer describes
+    // what is left. The rest is kept under no label, or, where it is only a fragment, said once in
+    // `unplaced` rather than set down as a line about the run that reads as nothing.
+    if (isAFragment(keptText)) {
+      read.unplaced.push(`state.md line ${other.lineNumber}: what was left of the Clock section's ${other.label === '' ? 'line' : `"${other.label}" line`} once its counts were left out was only a fragment, so it was left out of the run too.`);
+      continue;
+    }
+    read.settingLines.push(keptText);
   }
   const relativeClockMade = addRelativeClock(section, read, runBegan?.value ?? null, relativeSentences);
   // With no "day +N" anywhere there is no days-after clock to count from the run's start, so the
@@ -381,8 +402,54 @@ function readThreadSection(section: Section, read: StateRead, names: NameFinder)
       openedInScene: openedSceneOfThread(text),
       closed: closure !== null,
       resolution: closure ?? '',
+      touchedInScenes: scenesAThreadNamesAfterItsOpening(text, openedSceneOfThread(text)),
     });
   }
+}
+
+/** A scene reference, singly, as a range, or as a list: "Scene 12", "Scenes 4-6", "Scenes 4, 6 and 8". */
+const SCENE_REFERENCE = /(\b(?:before|by|until|till|due)\s+)?\bScene(s?)\s+(\d+(?:\s*(?:[-–]|to|,|and|&)\s*\d+)*)/gi;
+
+/** What may stand between a deadline's scene and another scene that is part of the same deadline. */
+const JOINED_TO_THE_SCENE_BEFORE = /^\s*(?:,\s*)?(?:(?:and|or|&)\s*)?$/i;
+
+/**
+ * Every scene a thread's text names after the scene it opened in, oldest first, each once. A range
+ * counts by its last scene, and every scene of a list counts. Only "Scenes" makes a list: after a
+ * single "Scene 5", a number joined by a comma or "and" is a count ("Scene 5, 8 coins paid"), not
+ * another scene. A scene named only as a deadline ("before Scene 10", "by Scene 10") is not
+ * counted, since it says when something must happen, not when the thread moved, and neither is a
+ * scene joined to a deadline by "and", "or" or a comma alone ("by Scene 6 or Scene 7"). Where the
+ * opening is not known, every scene named counts. This is how a hand-kept file keeps a thread
+ * alive: it adds a dated update inside the bullet, and the scene of the newest update is when the
+ * thread last moved.
+ */
+export function scenesAThreadNamesAfterItsOpening(text: string, openedInScene: number | null): number[] {
+  const named = new Set<number>();
+  let endOfTheDeadlineBefore: number | null = null;
+  for (const match of text.matchAll(SCENE_REFERENCE)) {
+    const start = match.index ?? 0;
+    const joinedToADeadline = endOfTheDeadlineBefore !== null && JOINED_TO_THE_SCENE_BEFORE.test(text.slice(endOfTheDeadlineBefore, start));
+    if (match[1] !== undefined || joinedToADeadline) {
+      endOfTheDeadlineBefore = start + match[0].length;
+      continue;
+    }
+    endOfTheDeadlineBefore = null;
+    const isAList = (match[2] ?? '') !== '';
+    const parts = (match[3] ?? '').split(/\s*([-–]|to|,|and|&)\s*/i);
+    const numbers: number[] = [];
+    for (let position = 0; position < parts.length; position += 2) {
+      const number = Number(parts[position]);
+      const separator = position === 0 ? null : (parts[position - 1] ?? '').toLowerCase();
+      if (separator === '-' || separator === '–' || separator === 'to') numbers[numbers.length - 1] = number;
+      else if (separator === null || isAList) numbers.push(number);
+      else break;
+    }
+    for (const number of numbers) {
+      if (Number.isInteger(number) && (openedInScene === null || number > openedInScene)) named.add(number);
+    }
+  }
+  return [...named].sort((left, right) => left - right);
 }
 
 /**

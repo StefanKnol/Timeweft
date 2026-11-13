@@ -158,6 +158,17 @@ export interface ThreadAboutEntriesTable {
   position: number;
 }
 
+/** A scene that moved a thread on. Whether it counts is read off the scene's status. */
+export interface ThreadTouchesTable {
+  thread_id: string;
+  scene_id: string;
+  note: string;
+  /** The scene whose save wrote this touch; null where an import wrote it. */
+  written_by_scene_id: string | null;
+  created_at: CreatedAt;
+  written_order: WrittenOrder;
+}
+
 export interface WaypointsTable {
   id: string;
   run_id: string;
@@ -215,6 +226,7 @@ export interface Database {
   ruling_about_entries: RulingAboutEntriesTable;
   threads: ThreadsTable;
   thread_about_entries: ThreadAboutEntriesTable;
+  thread_touches: ThreadTouchesTable;
   waypoints: WaypointsTable;
   journey_legs: JourneyLegsTable;
   collisions: CollisionsTable;

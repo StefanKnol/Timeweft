@@ -110,6 +110,11 @@ export interface SceneEstablished {
   rulings: RulingRecord[];
   threadsOpened: ThreadRecord[];
   threadsClosed: ThreadRecord[];
+  /**
+   * The threads this scene moved on without closing, with what moved where it said: the same
+   * threads read_scene lists as touched. A struck take is not in a thread's touches, so it has none.
+   */
+  threadsTouched: Array<{ thread: ThreadRecord; note: string }>;
   /** The journeys first travelled in this scene. */
   legs: JourneyLegRecord[];
 }
@@ -122,6 +127,10 @@ export function whatASceneEstablished(sceneId: Id, snapshot: RunSnapshot): Scene
     rulings: snapshot.rulings.filter((ruling) => ruling.sceneId === sceneId),
     threadsOpened: snapshot.threads.filter((thread) => thread.openedInSceneId === sceneId),
     threadsClosed: snapshot.threads.filter((thread) => thread.closedInSceneId === sceneId),
+    threadsTouched: snapshot.threads.flatMap((thread) => {
+      const touch = thread.touches.find((each) => each.sceneId === sceneId);
+      return touch === undefined || thread.closedInSceneId === sceneId ? [] : [{ thread, note: touch.note }];
+    }),
     legs: snapshot.legs.filter((leg) => leg.sceneId === sceneId),
   };
 }
@@ -247,26 +256,46 @@ export function rulingsMatching(rulings: RulingRecord[], filterText: string): Ru
     .sort((first, second) => first.number - second.number);
 }
 
-/** A thread with the scene numbers it opened and closed at. */
+/** A thread with the scene numbers it opened at, was last touched at and closed at. */
 export interface ThreadAsDrawn {
   thread: ThreadRecord;
   openedInSceneNumber: number | null;
+  /** The scene that last opened, touched or closed it, as the store derived it. */
+  lastTouchedInSceneNumber: number | null;
+  /** What moved in that scene, where its touch said. */
+  lastTouchNote: string;
   closedInSceneNumber: number | null;
 }
 
-/** Open threads first, each half in the order the threads opened. */
+/**
+ * Open threads first. Each half in the order a briefing ranks threads: the one a scene moved last
+ * first, by the scene it was last touched in, then the scene it opened in, the newest first, then
+ * the latest written. An unknown scene ranks after every known one at its step.
+ */
 export function threadsOpenFirst(threads: ThreadRecord[], scenes: SceneRecord[]): { open: ThreadAsDrawn[]; closed: ThreadAsDrawn[] } {
   const sceneNumbers = sceneNumbersById(scenes);
+  const numberOf = (sceneId: string | null): number | null => (sceneId === null ? null : sceneNumbers.get(sceneId) ?? null);
+  const newestFirst = (first: number | null, second: number | null): number => {
+    if (first === null && second !== null) return 1;
+    if (first !== null && second === null) return -1;
+    return (second ?? 0) - (first ?? 0);
+  };
   const drawn = threads
-    .map((thread) => ({
-      thread,
-      openedInSceneNumber: thread.openedInSceneId === null ? null : sceneNumbers.get(thread.openedInSceneId) ?? null,
-      closedInSceneNumber: thread.closedInSceneId === null ? null : sceneNumbers.get(thread.closedInSceneId) ?? null,
+    .map((thread, writtenPosition) => ({
+      writtenPosition,
+      item: {
+        thread,
+        openedInSceneNumber: numberOf(thread.openedInSceneId),
+        lastTouchedInSceneNumber: numberOf(thread.lastTouchedInSceneId),
+        lastTouchNote: thread.touches.find((touch) => touch.sceneId === thread.lastTouchedInSceneId)?.note ?? '',
+        closedInSceneNumber: numberOf(thread.closedInSceneId),
+      },
     }))
-    .sort((first, second) => {
-      const byOpening = (first.openedInSceneNumber ?? 0) - (second.openedInSceneNumber ?? 0);
-      return byOpening !== 0 ? byOpening : first.thread.createdAt.localeCompare(second.thread.createdAt);
-    });
+    .sort((first, second) =>
+      newestFirst(first.item.lastTouchedInSceneNumber, second.item.lastTouchedInSceneNumber)
+      || newestFirst(first.item.openedInSceneNumber, second.item.openedInSceneNumber)
+      || second.writtenPosition - first.writtenPosition)
+    .map((each) => each.item);
   // A thread is closed by the scene that closed it; a resolution alone does not close it.
   return {
     open: drawn.filter((item) => item.thread.closedInSceneId === null),

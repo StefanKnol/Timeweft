@@ -32,6 +32,8 @@ export interface SceneInFull {
   rulings: RulingRecord[];
   threadsOpened: ThreadRecord[];
   threadsClosed: ThreadRecord[];
+  /** The open threads this scene moved on without opening or closing them. */
+  threadsTouched: ThreadRecord[];
   /** The journeys first travelled in this scene. */
   legs: JourneyLegRecord[];
 }

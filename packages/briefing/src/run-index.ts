@@ -130,25 +130,43 @@ export function writtenPositionsOfThreads(index: RunIndex): Map<ThreadRecord, nu
 }
 
 /**
- * The open threads a briefing serves, newest first: by the number of the scene each was opened in,
- * the newest scene first; then by when it was written, the latest first; then by its place in the
- * snapshot, the latest first. A thread whose opening scene is not known, because none was recorded
- * or the one named is not in the run, comes after every thread whose scene is known, in the order
- * it was written, the latest first. Never by id, since ids are random.
+ * The number of the newest standing scene that moved a thread: the one the store says it was last
+ * touched in, or failing that the newest standing among its opening, its touches and its closing.
+ * A struck take's scene never counts. Null where none of them is a standing scene of the run.
  */
-export function openThreadsNewestFirst(index: RunIndex): ThreadRecord[] {
+export function lastTouchedSceneNumberOf(index: RunIndex, thread: ThreadRecord): number | null {
+  let newest: number | null = null;
+  for (const sceneId of [thread.lastTouchedInSceneId, thread.openedInSceneId, ...thread.touches.map((touch) => touch.sceneId), thread.closedInSceneId]) {
+    if (sceneId === null || wasEstablishedInAStruckScene(index, sceneId)) continue;
+    const number = sceneNumberOf(index, sceneId);
+    if (number !== null && (newest === null || number > newest)) newest = number;
+  }
+  return newest;
+}
+
+/**
+ * Threads ranked so the one a scene moved last comes first: by the scene each was last touched in
+ * (opened, touched or closed), the newest first; then by the scene it was opened in, the newest
+ * first; then by its place in the snapshot, which is the order the store wrote them, the latest
+ * first. A scene that is not known (none was recorded, or the one named is not a standing scene of
+ * the run) ranks after every known one at that step. Never by id, since ids are random.
+ */
+export function threadsLastTouchedFirst(index: RunIndex, threads: ThreadRecord[]): ThreadRecord[] {
   const writtenPosition = writtenPositionsOfThreads(index);
-  return servableThreads(index)
-    .filter((thread) => thread.closedInSceneId === null)
-    .sort((left, right) => {
-      const leftScene = sceneNumberOf(index, left.openedInSceneId);
-      const rightScene = sceneNumberOf(index, right.openedInSceneId);
-      if (leftScene === null && rightScene !== null) return 1;
-      if (leftScene !== null && rightScene === null) return -1;
-      return (rightScene ?? 0) - (leftScene ?? 0)
-        || compareText(right.createdAt, left.createdAt)
-        || (writtenPosition.get(right) ?? 0) - (writtenPosition.get(left) ?? 0);
-    });
+  const newestFirst = (left: number | null, right: number | null): number => {
+    if (left === null && right !== null) return 1;
+    if (left !== null && right === null) return -1;
+    return (right ?? 0) - (left ?? 0);
+  };
+  return [...threads].sort((left, right) =>
+    newestFirst(lastTouchedSceneNumberOf(index, left), lastTouchedSceneNumberOf(index, right))
+    || newestFirst(sceneNumberOf(index, left.openedInSceneId), sceneNumberOf(index, right.openedInSceneId))
+    || (writtenPosition.get(right) ?? 0) - (writtenPosition.get(left) ?? 0));
+}
+
+/** The open threads a briefing serves, the one a scene moved last first (threadsLastTouchedFirst says how). */
+export function openThreadsNewestFirst(index: RunIndex): ThreadRecord[] {
+  return threadsLastTouchedFirst(index, servableThreads(index).filter((thread) => thread.closedInSceneId === null));
 }
 
 export function entryNameOf(index: RunIndex, entryId: Id): string | null {

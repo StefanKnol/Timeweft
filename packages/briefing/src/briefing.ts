@@ -18,15 +18,15 @@
  */
 import { Refusal } from '@timeweft/contract';
 import type {
-  Briefing, BriefingSection, EntryRecord, FactRecord, Id, JourneyLegRecord, RulingRecord, RunSnapshot, SceneRecord,
+  Briefing, BriefingSection, EntryRecord, FactRecord, Id, JourneyLegRecord, RulingRecord, RunSnapshot, SceneRecord, ThreadRecord,
 } from '@timeweft/contract';
 import { resolveEntryInIndex } from './readers.ts';
 import {
-  compareText, entryNameOf, holdingFactsOf, indexRun, newestStandingScene, openThreadsNewestFirst, rulingsInForce, sceneNumberOf,
+  compareText, entryNameOf, holdingFactsOf, indexRun, lastTouchedSceneNumberOf, newestStandingScene, openThreadsNewestFirst, rulingsInForce, sceneNumberOf,
   trailNewestFirstOf, wasEstablishedInAStruckScene,
 } from './run-index.ts';
 import type { RunIndex } from './run-index.ts';
-import { CUT_MARKER, SMALLEST_USEFUL_CUT_BYTES, byteLengthOf, cutToFit, onOneLine } from './text-fitting.ts';
+import { CUT_MARKER, SMALLEST_USEFUL_CUT_BYTES, byteLengthOf, cutToFit, onOneLine, openingAndEndingOf } from './text-fitting.ts';
 
 export interface BriefingRequest {
   /** Names the next scene is likely to involve. */
@@ -53,12 +53,21 @@ const NEWEST_SCENES_ALWAYS_FIRST = 3;
 const LONGEST_FACT_LINE_BYTES = 600;
 
 /**
+ * The most one open thread's own text takes in a briefing. A thread kept by hand for a long while
+ * can run to many thousands of bytes, and whole it would leave room for no other thread. Past
+ * this it is shown by its opening and its ending, and list_threads gives it whole.
+ */
+export const LONGEST_THREAD_TEXT_BYTES = 450;
+
+/**
  * The sections, their share of the room, and for the first three the least they are given. The
  * journeys' small share was taken from the last scenes, which list_scenes serves in full anyway.
  * The rulings hold about a fifth of the budget, taken from the page and the last scenes, because the
  * author's standing instructions about how a run is told were being left out of long runs.
+ * The open threads hold about an eighth, taken from the run's own section, which rarely fills its
+ * share: on a long run six hundredths showed two threads of a hundred and forty.
  */
-const SECTION_SHARES = [0.2, 0.07, 0.2, 0.05, 0.15, 0.2, 0.06, 0.03, 0.04] as const;
+const SECTION_SHARES = [0.14, 0.07, 0.2, 0.05, 0.15, 0.2, 0.12, 0.03, 0.04] as const;
 /** Stands in the back pass's order for the first item of each section that takes room for it. */
 const FIRST_ITEM_OF_A_SECTION_THAT_TAKES_ROOM = -1;
 /**
@@ -711,10 +720,13 @@ function rulingsSection(index: RunIndex, upcomingEntryIds: ReadonlySet<Id>): Sec
 
 /**
  * The open threads, ranked so a fresh chat meets what matters first: the threads about an entry on
- * the page next lead, then the rest. Within each group a thread opened in a later scene comes
- * before one opened in an earlier scene, ties go to the one written later, and a thread whose
- * opening scene is not known comes after every one whose scene is, the latest written first
- * (openThreadsNewestFirst says it in full).
+ * the page next lead, then the rest. Within each group the thread a scene moved last comes first:
+ * by the scene it was last touched in (opened, touched or closed), the newest first; then by the
+ * scene it was opened in, the newest first; then the latest written first; never by id
+ * (threadsLastTouchedFirst says it in full). A hand-kept run keeps a thread alive by touching it,
+ * so a thread opened long ago and still moving ranks by its latest move, not by its opening. A
+ * line says "last touched scene N" beside its id where that is not the scene it opened in, so a
+ * cut keeps it, and ends on what moved there where the touch said.
  */
 function threadsSection(index: RunIndex, upcomingEntryIds: ReadonlySet<Id>): SectionPlan {
   const openNewestFirst = openThreadsNewestFirst(index);
@@ -722,14 +734,31 @@ function threadsSection(index: RunIndex, upcomingEntryIds: ReadonlySet<Id>): Sec
   const others = openNewestFirst.filter((thread) => !thread.aboutEntryIds.some((entryId) => upcomingEntryIds.has(entryId)));
   const pieces = [...touching, ...others].map((thread, threadIndex) => {
     const about = aboutNames(index, thread.aboutEntryIds);
-    // The id leads, so that a line cut short still carries what a save needs to close it.
-    return makePiece(`- Thread ${thread.id}: `, `${onOneLine(thread.text)}${about.length > 0 ? ` (about ${about})` : ''}`, { priority: threadIndex });
+    const lastTouched = lastTouchOf(index, thread);
+    const details = [about.length > 0 ? `about ${about}` : '', lastTouched === null || lastTouched.note === '' ? '' : `latest: ${lastTouched.note}`]
+      .filter((part) => part !== '').join('; ');
+    // The id leads, so that a line cut short still carries what a save needs to touch or close it,
+    // and when it was last touched comes with it, since a long thread is cut before its end.
+    const head = lastTouched === null ? `- Thread ${thread.id}: ` : `- Thread ${thread.id} (last touched scene ${lastTouched.sceneNumber}): `;
+    return makePiece(head, `${openingAndEndingOf(onOneLine(thread.text), LONGEST_THREAD_TEXT_BYTES)}${details.length > 0 ? ` (${details})` : ''}`, { priority: threadIndex });
   });
   if (pieces.length === 0) pieces.push(makePiece('', 'None.', { priority: 0, isItem: false }));
   return {
     name: 'Open threads', heading: '## Open threads\n', pieces, alwaysPresent: false,
     fetchWith: 'list_threads fetches every open thread.',
   };
+}
+
+/**
+ * The scene a thread was last touched in, and what moved there where that touch carried a note.
+ * Null where it was last touched in the scene it opened in, or in no known scene: then there is
+ * nothing more to say than its opening.
+ */
+function lastTouchOf(index: RunIndex, thread: ThreadRecord): { sceneNumber: number; note: string } | null {
+  const sceneNumber = lastTouchedSceneNumberOf(index, thread);
+  if (sceneNumber === null || sceneNumber === sceneNumberOf(index, thread.openedInSceneId)) return null;
+  const touch = thread.touches.find((candidate) => sceneNumberOf(index, candidate.sceneId) === sceneNumber);
+  return { sceneNumber, note: touch === undefined ? '' : onOneLine(touch.note) };
 }
 
 /** The names asked for, and every other name each answers to, folded for a case-blind match. */

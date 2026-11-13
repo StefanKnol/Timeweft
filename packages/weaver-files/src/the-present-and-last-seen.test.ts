@@ -127,11 +127,13 @@ test('"last seen" is brought up to the newest scene naming the entry, the hand-k
   assert.ok(run.unplaced.some((line) => /2 entries' "last seen" line was older/.test(line)));
 });
 
-test('a count written once in the Clock section is left out of the run, and its other sentences go to the setting', () => {
+test('a count written once in the Clock section is left out of the run, and its other sentences go to the setting under no label', () => {
   const situation = run.scenes.at(-1)?.situationAfter ?? '';
   assert.equal(situation, 'The miller waits at the ford for the ferry (Scene 4).');
   assert.doesNotMatch(situation, /Elapsed|three days|Valley age/);
-  assert.equal(run.setting, 'A valley\nElapsed in run: Note (author, Scene 2): the ferry keeps no clock.\nValley age: some centuries since the mill was built');
+  // The "Elapsed in run" label named the count that was left out, so what is left keeps no label.
+  assert.equal(run.setting, 'A valley\nNote (author, Scene 2): the ferry keeps no clock.\nValley age: some centuries since the mill was built');
+  for (const line of run.setting.split('\n')) assert.doesNotMatch(line, /^Elapsed in run:/);
   assert.ok(run.unplaced.some((line) => /a sentence of the Clock section's "Elapsed in run" line that carry a count on a kept clock were left out/.test(line)));
   for (const clock of run.clocks) assert.doesNotMatch(clock.countsFrom, /three days|day \+3 =/);
   // A count closing its sentence is still a count.
@@ -194,6 +196,14 @@ test('a "Run began" line with no days-after clock to count from it goes to the s
   const counted = clockSectionAlone('- Run began: the eve of the harvest\n- Note: scenes are stamped (harvest day +2).', 'began-counted');
   assert.match(counted.clocks.find((clock) => clock.name === 'harvest')?.countsFrom ?? '', /the eve of the harvest/);
   assert.doesNotMatch(counted.setting, /Run began/);
+});
+
+test('what is left of a Clock section bullet once its count is out is dropped to the unplaced report where it is only a fragment', () => {
+  const read = clockSectionAlone('- Mill clock: Mill Day 1 = the first flood.\n- Elapsed: the run is at Mill Day 9. So far.\n- Pond: low since the dry spell began.', 'fragment');
+  assert.equal(read.setting, 'Pond: low since the dry spell began.');
+  assert.ok(read.unplaced.some((line) => /"Elapsed" line once its counts were left out was only a fragment/.test(line)));
+  // An untouched short bullet keeps its label and is no fragment: only a line that lost a count is weighed.
+  assert.equal(clockSectionAlone('- Pond: low.', 'short').setting, 'Pond: low.');
 });
 
 test('a Clock section line that is not a bullet is the present less its counts, and a countless bullet is the setting', () => {

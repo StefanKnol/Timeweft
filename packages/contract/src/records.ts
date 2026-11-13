@@ -191,6 +191,16 @@ export interface RulingRecord {
   createdAt: string;
 }
 
+/**
+ * A scene that moved a thread on without opening or closing it, with what moved, where the scene
+ * said. Kept as a row of its own, so a struck take's touch can stop counting while the row stays.
+ */
+export interface ThreadTouchRecord {
+  sceneId: Id;
+  /** What moved, in a sentence or less. Empty where the scene said nothing more than that it touched it. */
+  note: string;
+}
+
 /** Something left open: a question, a promise, a tension. */
 export interface ThreadRecord {
   id: Id;
@@ -201,6 +211,17 @@ export interface ThreadRecord {
   closedInSceneId: Id | null;
   /** How it closed, in a sentence. Empty while open. */
   resolution: string;
+  /**
+   * The scenes that touched it, standing ones only, oldest scene first. A struck take's touch is
+   * never served. Derived by the store when it reads; nothing writes this list by hand.
+   */
+  touches: ThreadTouchRecord[];
+  /**
+   * The newest standing scene among the one that opened it, the ones that touched it and the one
+   * that closed it: the scene it last moved in. Null where none of those is a standing scene.
+   * Derived by the store when it reads, never written.
+   */
+  lastTouchedInSceneId: Id | null;
   createdAt: string;
 }
 

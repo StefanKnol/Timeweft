@@ -326,6 +326,28 @@ export const MIGRATIONS: Migration[] = [
         alter column write_mark set default nextval('${WRITE_MARKS}'), alter column write_mark set not null`),
     ],
   },
+  {
+    number: 5,
+    name: 'a scene may touch a thread',
+    statements: [
+      // A row per scene that moved a thread on, not a column on the thread: a touch by a take that is
+      // later struck must stop counting while the row is kept, and the scene's status says which.
+      // Both keys cascade, so removing a run's threads or scenes in either order removes its touches.
+      // written_by_scene_id is the scene whose save wrote the touch, and null for one an import wrote:
+      // a redo moves an import's touch onto the new take, as it moves an import's closing, and leaves
+      // the struck take's own where they are.
+      `create table thread_touches (
+        thread_id uuid not null references threads(id) on delete cascade,
+        scene_id uuid not null references scenes(id) on delete cascade,
+        note text not null default '',
+        written_by_scene_id uuid references scenes(id) on delete cascade,
+        ${WHEN_WRITTEN},
+        ${ORDER_WRITTEN},
+        primary key (thread_id, scene_id)
+      )`,
+      `create index thread_touches_by_scene on thread_touches (scene_id)`,
+    ],
+  },
 ];
 
 

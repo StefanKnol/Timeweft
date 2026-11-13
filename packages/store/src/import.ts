@@ -21,6 +21,9 @@
  *   the nearest scene would put it somewhere it never happened.
  * - A thread marked closed and a waypoint marked reached, with no scene saying when, are closed
  *   or reached at the run's newest scene: the files say so as of then.
+ * - Every scene a thread's text names after its opening is written as a touch of it, with no
+ *   note: a hand-kept file keeps a thread alive by adding dated updates inside its bullet, and the
+ *   scene of the newest is when it last moved.
  * - Rows are recorded as written by the scene they belong to, so a redo of the newest imported
  *   scene takes back what that scene established, as it would for a saved one.
  */
@@ -190,6 +193,10 @@ export async function importRunInto(database: Kysely<Database>, imported: Import
         established_by_scene_id: openedInSceneId, closed_by_scene_id: null,
       },
       aboutIds: [...new Set(thread.about.map((name) => entryIdFor(name, `Thread ${index + 1}`)).filter((id): id is string => id !== null))],
+      touchedSceneIds: [...new Set((thread.touchedInScenes ?? [])
+        .filter((number) => number !== thread.openedInScene)
+        .map((number) => sceneIdFor(number, `Thread ${index + 1}`))
+        .filter((id): id is string => id !== null))],
     };
   });
   const waypointRows = imported.waypoints.map((waypoint, index) => ({
@@ -221,6 +228,8 @@ export async function importRunInto(database: Kysely<Database>, imported: Import
   await insertInBatches(database, 'threads', threadRows.map((thread) => thread.row));
   await insertInBatches(database, 'thread_about_entries', threadRows.flatMap((thread) =>
     thread.aboutIds.map((entryId, position) => ({ thread_id: thread.row.id, entry_id: entryId, position }))));
+  await insertInBatches(database, 'thread_touches', threadRows.flatMap((thread) =>
+    thread.touchedSceneIds.map((sceneId) => ({ thread_id: thread.row.id, scene_id: sceneId, note: '' }))));
   await insertInBatches(database, 'waypoints', waypointRows);
   await insertInBatches(database, 'journey_legs', legRows);
 }

@@ -6,6 +6,10 @@ export function ThreadsSection({ snapshot }: { snapshot: RunSnapshot }) {
   const entryNames = new Map(snapshot.entries.map((entry) => [entry.id, entry.name]));
   const aboutWords = (item: ThreadAsDrawn) =>
     item.thread.aboutEntryIds.length === 0 ? '' : `About ${item.thread.aboutEntryIds.map((id) => entryNames.get(id) ?? 'an entry').join(', ')}. `;
+  const lastTouchedWords = (item: ThreadAsDrawn) =>
+    item.lastTouchedInSceneNumber === null || item.lastTouchedInSceneNumber === item.openedInSceneNumber
+      ? ''
+      : `, last touched at scene ${item.lastTouchedInSceneNumber}${item.lastTouchNote === '' ? '' : ` (${item.lastTouchNote})`}`;
   return (
     <>
       <h3>Open ({open.length})</h3>
@@ -14,7 +18,7 @@ export function ThreadsSection({ snapshot }: { snapshot: RunSnapshot }) {
           {open.map((item) => (
             <li key={item.thread.id} className="card">
               <p>{item.thread.text}</p>
-              <p className="quiet">{aboutWords(item)}Opened {item.openedInSceneNumber === null ? 'before the scenes' : `at scene ${item.openedInSceneNumber}`}.</p>
+              <p className="quiet">{aboutWords(item)}Opened {item.openedInSceneNumber === null ? 'before the scenes' : `at scene ${item.openedInSceneNumber}`}{lastTouchedWords(item)}.</p>
             </li>
           ))}
         </ul>

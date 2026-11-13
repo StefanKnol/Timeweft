@@ -52,6 +52,7 @@ export function readWeaverFiles(files: WeaverFiles, options: ReadWeaverFilesOpti
   fileRunStateUnderEntries(state, entries, unplaced);
   bringLastSeenUpToTheNewestScene(entries, log.scenes, unplaced);
   dateThreadsByTheClockCountsTheyName(state.threads, state.clocks, log.scenes);
+  keepTouchesOnScenesTheLogHas(state.threads, log.scenes);
 
   const lastScene = log.scenes[log.scenes.length - 1];
   if (state.situation !== '') {
@@ -141,6 +142,19 @@ function bringLastSeenUpToTheNewestScene(entries: ImportedEntry[], scenes: Impor
   }
   if (broughtUp > 0) {
     unplaced.push(`cast.md, items.md, places.md: ${broughtUp} ${broughtUp === 1 ? 'entry\'s' : 'entries\''} "last seen" line was older than the newest scene naming ${broughtUp === 1 ? 'it' : 'them'}, so a "last seen" of that scene was added and the hand-kept line kept as closed history.`);
+  }
+}
+
+/**
+ * A thread's touches are kept only on scenes the log has, and after the scene it opened in, which
+ * a clock count may have dated since its text was read. A scene the log lacks is a scene named in
+ * passing, not one the run can point at, so it is left out rather than refusing the import.
+ */
+function keepTouchesOnScenesTheLogHas(threads: ImportedRun['threads'], scenes: ImportedRun['scenes']): void {
+  const sceneNumbers = new Set(scenes.map((scene) => scene.number));
+  for (const thread of threads) {
+    thread.touchedInScenes = (thread.touchedInScenes ?? []).filter((number) =>
+      sceneNumbers.has(number) && (thread.openedInScene === null || number > thread.openedInScene));
   }
 }
 

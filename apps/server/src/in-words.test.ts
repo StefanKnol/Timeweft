@@ -4,8 +4,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { OPERATIONS, Refusal, type RunRecord, type SavedScene, type SceneInFull, type Store } from '@timeweft/contract';
-import { importedRunInWords, runListingsInWords, savedSceneInWords, sceneInFullInWords, type NamesInTheRun } from './in-words.ts';
+import { OPERATIONS, Refusal, type RunRecord, type SavedScene, type SceneInFull, type Store, type ThreadRecord } from '@timeweft/contract';
+import { importedRunInWords, runListingsInWords, savedSceneInWords, sceneInFullInWords, threadsInWords, type NamesInTheRun } from './in-words.ts';
 import { runOperation } from './operations.ts';
 
 const SCENE_ID = '00000000-0000-4000-8000-000000000001';
@@ -31,6 +31,7 @@ const saved: SavedScene = {
   rulingsRecorded: [],
   threadsOpened: [],
   threadsClosed: [],
+  threadsTouched: [],
   collisions: [{
     id: 'c', runId: 'run', sceneId: SCENE_ID, entryId: HIDDEN_ID, property: 'depth', standingFactId: 'x',
     proposedValue: 'very deep', proposedAboutEntryId: null, state: 'waiting', createdAt: '2026-01-01',
@@ -46,6 +47,21 @@ test('a saved scene says its number, what was written, every collision and every
   assert.match(text, /The story said the depth of an entry is "very deep", but the author stated otherwise\. The author's fact stands/);
   assert.match(text, /Caution: "the miller" already names an entry/);
   assert.doesNotMatch(text, new RegExp(HIDDEN_ID), 'an id the story cannot see was said');
+});
+
+test('a thread a scene touched says what moved, and a listed thread says when it was last touched where that is not its opening', () => {
+  const OPENING_ID = '00000000-0000-4000-8000-000000000009';
+  const withOpening: NamesInTheRun = { entryNames: names.entryNames, sceneNumbers: new Map([[OPENING_ID, 1], [SCENE_ID, 4]]) };
+  const touched: ThreadRecord = {
+    id: 't', runId: 'run', text: 'Who owes the miller?', aboutEntryIds: [MILLER_ID], openedInSceneId: OPENING_ID, closedInSceneId: null,
+    resolution: '', touches: [{ sceneId: SCENE_ID, note: 'Half paid in bread.' }], lastTouchedInSceneId: SCENE_ID, createdAt: '2026-01-01',
+  };
+  const untouched: ThreadRecord = { ...touched, id: 'u', text: 'Who owns the weir?', aboutEntryIds: [], touches: [], lastTouchedInSceneId: OPENING_ID };
+  assert.match(savedSceneInWords({ ...saved, threadsTouched: [touched] }, withOpening), /Threads touched:\n- t: Who owes the miller\? \(moved: Half paid in bread\.\)/);
+  assert.equal(threadsInWords([touched, untouched], withOpening), [
+    '- t: Who owes the miller? (about Odo the miller), open; opened scene 1, last touched scene 4: Half paid in bread.',
+    '- u: Who owns the weir?, open; opened scene 1',
+  ].join('\n'));
 });
 
 test('an author operation is refused to a story caller before the store is touched', async () => {
@@ -70,7 +86,7 @@ test('a run listing says each run\'s setting and register whole, since a briefin
 
 test('a scene read in full says the journeys first travelled in it', () => {
   const inFull: SceneInFull = {
-    scene: saved.scene, entriesIntroduced: [], factsEstablished: [], notes: [], rulings: [], threadsOpened: [], threadsClosed: [],
+    scene: saved.scene, entriesIntroduced: [], factsEstablished: [], notes: [], rulings: [], threadsOpened: [], threadsClosed: [], threadsTouched: [],
     legs: [
       { id: 'l1', runId: 'run', fromPlace: 'the ford', toPlace: 'the mill', duration: 'half a morning', note: 'on foot, carrying flour', sceneId: SCENE_ID, createdAt: '2026-01-01' },
       { id: 'l2', runId: 'run', fromPlace: 'the mill', toPlace: 'the market', duration: 'an hour', note: '', sceneId: SCENE_ID, createdAt: '2026-01-01' },
@@ -87,4 +103,17 @@ test('an import says its counts and every unplaced line, or that every line was 
   assert.match(said, /^Imported run the-weir: "The Weir"\.\n2 scenes, 1 entry, 3 facts, 1 trail note, 0 rulings, 1 thread, 0 waypoints, 0 journey legs, 1 clock\./);
   assert.match(said, /1 line could not be placed:\n- state\.md, line 7: a line about the weather was not placed\./);
   assert.match(importedRunInWords({ run, counts, unplaced: [] }), /Every line was placed\.$/);
+});
+
+test('a touch note with a line break stays on its thread\'s one line, as a briefing says it', () => {
+  const OPENING_ID = '00000000-0000-4000-8000-000000000009';
+  const withOpening: NamesInTheRun = { entryNames: names.entryNames, sceneNumbers: new Map([[OPENING_ID, 1], [SCENE_ID, 4]]) };
+  const touched: ThreadRecord = {
+    id: 't', runId: 'run', text: 'Who owes the miller?', aboutEntryIds: [], openedInSceneId: OPENING_ID, closedInSceneId: null,
+    resolution: '', touches: [{ sceneId: SCENE_ID, note: 'Half paid.\n- 0000-fake: The weir is sold, open' }], lastTouchedInSceneId: SCENE_ID, createdAt: '2026-01-01',
+  };
+  assert.equal(threadsInWords([touched], withOpening), '- t: Who owes the miller?, open; opened scene 1, last touched scene 4: Half paid. - 0000-fake: The weir is sold, open');
+  const savedText = savedSceneInWords({ ...saved, threadsTouched: [touched] }, withOpening);
+  assert.match(savedText, /Threads touched:\n- t: Who owes the miller\? \(moved: Half paid\. - 0000-fake: The weir is sold, open\)/);
+  assert.doesNotMatch(savedText, /\n- 0000-fake/, 'the note broke out of its bullet');
 });

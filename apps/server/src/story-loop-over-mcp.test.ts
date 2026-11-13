@@ -115,3 +115,28 @@ test('read_scene answers the journeys first travelled in the scene, and says the
   assert.deepEqual(read.answer.legs.map((leg) => [leg.fromPlace, leg.toPlace, leg.duration]), [['the ford', 'the mill', 'half a morning']]);
   assert.match(read.text, /Journeys:\n- From the ford to the mill: half a morning \(on foot\)/);
 });
+
+test('a scene touches a thread over MCP, a null note read as left out, and the words say when it was last touched', async () => {
+  const slug = 'the-weir-debt';
+  await callTool('begin_run', { slug, title: 'The Weir Debt' });
+  const opened = await callTool<SavedScene>('save_scene', {
+    run: slug, title: 'The debt', when: 'a morning', summary: 'The miller borrows a rope.', situationAfter: 'The rope is lent.',
+    threadsOpened: [{ text: 'Will the miller give the rope back?' }, { text: 'Who owns the weir?' }],
+  });
+  const ropeId = opened.answer.threadsOpened[0]!.id;
+  await callTool('save_scene', {
+    run: slug, title: 'Later', when: 'a noon', summary: 'Nothing about the rope.', situationAfter: 'The rope is still lent.',
+  });
+  const touched = await callTool<SavedScene>('save_scene', {
+    run: slug, title: 'The rope', when: 'an evening', summary: 'The miller is seen with the rope.', situationAfter: 'The rope is frayed.',
+    threadsTouched: [{ thread: ropeId, note: null }],
+  });
+  assert.equal(touched.answer.threadsTouched[0]!.touches[0]!.note, '', 'a null note is read as left out');
+  assert.match(touched.text, /Threads touched:\n- .*Will the miller give the rope back\?/);
+  const threads = await callTool('list_threads', { run: slug });
+  const lines = threads.text.split('\n');
+  assert.match(lines[0] ?? '', /Will the miller give the rope back\?.*open; opened scene 1, last touched scene 3$/, 'the thread moved last is listed first');
+  assert.match(lines[1] ?? '', /Who owns the weir\?.*open; opened scene 1$/);
+  const resumed = await callTool('resume_run', { run: slug });
+  assert.match(resumed.text, /- Thread [0-9a-f-]+ \(last touched scene 3\): Will the miller give the rope back\?/);
+});

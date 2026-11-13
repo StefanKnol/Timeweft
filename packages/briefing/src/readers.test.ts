@@ -137,8 +137,8 @@ describe('rulingsBearingOn', () => {
 });
 
 describe('threadsOpenFor', () => {
-  it('answers open threads only, never one opened in a struck scene', () => {
-    assert.deepEqual(threadsOpenFor(millerRun(), { aboutEntryIds: [], includeClosed: false }).map((thread) => thread.id), ['thread-rope', 'thread-flour']);
+  it('answers open threads only, never one opened in a struck scene, the one moved last first', () => {
+    assert.deepEqual(threadsOpenFor(millerRun(), { aboutEntryIds: [], includeClosed: false }).map((thread) => thread.id), ['thread-flour', 'thread-rope']);
   });
 
   it('answers closed ones too when asked', () => {

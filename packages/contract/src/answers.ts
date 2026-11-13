@@ -56,6 +56,8 @@ export interface SavedScene {
   rulingsRecorded: RulingRecord[];
   threadsOpened: ThreadRecord[];
   threadsClosed: ThreadRecord[];
+  /** Open threads the scene moved on without opening or closing, as they stand after the save. */
+  threadsTouched: ThreadRecord[];
   /** What was held back for the author. */
   collisions: CollisionRecord[];
   /** Anything the caller should know, in sentences: a name that already exists, a fact skipped. */
@@ -193,7 +195,11 @@ export interface ImportedRun {
   scenes: ImportedScene[];
   entries: ImportedEntry[];
   rulings: ImportedRuling[];
-  threads: Array<{ text: string; about: string[]; openedInScene: number | null; closed: boolean; resolution: string }>;
+  /**
+   * `touchedInScenes` holds every scene the thread's text names after its opening, a range read
+   * for its last scene, oldest first: the importer writes each as a touch. Left out, it has none.
+   */
+  threads: Array<{ text: string; about: string[]; openedInScene: number | null; closed: boolean; resolution: string; touchedInScenes?: number[] }>;
   waypoints: Array<{ text: string; reached: boolean }>;
   legs: Array<{ from: string; to: string; duration: string; note: string; scene: number | null }>;
   /** What the reader could not place, in sentences, so nothing is dropped in silence. */

@@ -8,4 +8,4 @@ export {
   factsHoldingFor, findInRun, lookUpEntry, resolveEntryByName, rulingsBearingOn, sceneInFull, standingScenesOf,
   threadsOpenFor,
 } from './readers.ts';
-export { CUT_MARKER, byteLengthOf, cutToFit } from './text-fitting.ts';
+export { CUT_MARKER, MIDDLE_LEFT_OUT_MARKER, byteLengthOf, cutToFit, onOneLine, openingAndEndingOf } from './text-fitting.ts';
