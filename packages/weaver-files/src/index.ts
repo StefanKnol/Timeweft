@@ -42,7 +42,7 @@ export function readWeaverFiles(files: WeaverFiles, options: ReadWeaverFilesOpti
   const names = nameFinderFor(allNames);
 
   const emptyState: StateRead = {
-    clocks: [], situation: '', settingLines: [], register: '', rulings: [], threads: [], waypoints: [],
+    clocks: [], situation: '', clockNoteRulings: [], register: '', rulings: [], threads: [], waypoints: [],
     runStateLines: [], stackedHistoryBytes: 0, stackedHistoryLines: [], unplaced: [],
   };
   const state = safely('state.md', () => readState(files.state ?? '', names), emptyState, unplaced);
@@ -50,6 +50,7 @@ export function readWeaverFiles(files: WeaverFiles, options: ReadWeaverFilesOpti
   const log = safely('log.md', () => readLog(files.log ?? '', state.clocks, placeNames), { title: '', scenes: [], unplaced: [] }, unplaced);
 
   fileRunStateUnderEntries(state, entries, unplaced);
+  const clockNoteRulings = clockNotesOnScenesTheLogHas(state.clockNoteRulings, log.scenes, unplaced);
   bringLastSeenUpToTheNewestScene(entries, log.scenes, unplaced);
   dateThreadsByTheClockCountsTheyName(state.threads, state.clocks, log.scenes);
   keepTouchesOnScenesTheLogHas(state.threads, log.scenes);
@@ -66,18 +67,32 @@ export function readWeaverFiles(files: WeaverFiles, options: ReadWeaverFilesOpti
   return {
     slug: options.slug,
     title: options.title ?? (log.title !== '' ? log.title : options.slug),
-    setting: [options.setting ?? '', ...state.settingLines].filter((part) => part !== '').join('\n'),
+    setting: options.setting ?? '',
     status: options.status ?? 'binding',
     register: state.register,
     clocks: state.clocks.map((clock) => ({ name: clock.name, countsFrom: clock.countsFrom })),
     scenes: log.scenes,
     entries,
-    rulings: state.rulings,
+    rulings: [...state.rulings, ...clockNoteRulings],
     threads: state.threads,
     waypoints: state.waypoints,
     legs: places.legs,
     unplaced: [...log.unplaced, ...state.unplaced, ...cast.unplaced, ...items.unplaced, ...places.unplaced, ...unplaced],
   };
+}
+
+/**
+ * The author's notes from the Clock section, after the standing rulings so their numbering holds.
+ * Each keeps the scene it names where the log has that scene; where it does not, the note is kept
+ * with no scene and that is said once.
+ */
+function clockNotesOnScenesTheLogHas(rulings: ImportedRun['rulings'], scenes: ImportedRun['scenes'], unplaced: string[]): ImportedRun['rulings'] {
+  const sceneNumbers = new Set(scenes.map((scene) => scene.number));
+  return rulings.map((ruling) => {
+    if (ruling.scene === null || sceneNumbers.has(ruling.scene)) return ruling;
+    unplaced.push(`state.md: a note by the author in the Clock section names scene ${ruling.scene}, which the log does not have, so it was kept as a ruling with no scene.`);
+    return { ...ruling, scene: null };
+  });
 }
 
 /**
