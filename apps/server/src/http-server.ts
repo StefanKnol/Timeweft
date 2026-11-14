@@ -6,14 +6,20 @@
  * so a value that cannot be sent is an ordinary failure rather than half an answer. And nothing a
  * request throws ends the process: every request's handling runs inside one catch, and an address
  * that cannot even be read is a 400.
+ *
+ * Answers and the pages' files are compressed where the browser says it can read them: brotli
+ * first, then gzip, else sent as they are. A phone on mobile data then fetches about a tenth of the
+ * bytes. The MCP route is left as its transport writes it.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { promisify } from 'node:util';
+import { brotliCompress, constants as zlibConstants, gzip } from 'node:zlib';
 import { buildStampFromEnvironment } from './build-stamp.ts';
 import { OPERATION_ROUTE_PREFIX, Refusal, type OperationName, type Store, type WireAnswer } from '@timeweft/contract';
 import { carriesATokenForStories, carriesTheToken, type AccessSettings } from './access.ts';
 import { serveMcpRequest } from './mcp.ts';
 import { isOperationName, runOperation } from './operations.ts';
-import { staticFileFor } from './static-files.ts';
+import { staticFileFor, type StaticFile } from './static-files.ts';
 
 /** The largest body a request may carry. A scene with a long record is far below it. */
 export const LARGEST_BODY_BYTES = 5 * 1024 * 1024;
@@ -94,15 +100,123 @@ export function readRequestPath(request: IncomingMessage): string | null {
   }
 }
 
-function sendJson(response: ServerResponse, status: number, value: unknown): void {
-  const body = JSON.stringify(value);
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body) });
+
+/** How an answer's bytes are sent: brotli, gzip, or as they are. */
+export type ContentEncoding = 'br' | 'gzip' | 'identity';
+
+/**
+ * Below this many bytes an answer is sent as it is. Compressing a short refusal saves a few bytes
+ * and costs more than it saves, and the headers alone are about this size.
+ */
+export const SMALLEST_BODY_WORTH_COMPRESSING = 1024;
+
+/**
+ * The encoding to send, read from the request's Accept-Encoding header. Each encoding the browser
+ * names may carry a weight (`gzip;q=0.5`), and a weight of 0 means "never". `*` stands for any
+ * encoding not named. Brotli is chosen over gzip where both are equally welcome, since it makes the
+ * smaller answer. A request that names neither, or sends no header at all, gets the answer as it is.
+ */
+export function encodingAcceptedBy(acceptEncoding: string | string[] | undefined): ContentEncoding {
+  const header = Array.isArray(acceptEncoding) ? acceptEncoding.join(',') : acceptEncoding ?? '';
+  const weights = new Map<string, number>();
+  for (const part of header.split(',')) {
+    const [nameWithSpaces, ...parameters] = part.split(';');
+    const name = (nameWithSpaces ?? '').trim().toLowerCase();
+    if (name === '') continue;
+    let weight = 1;
+    for (const parameter of parameters) {
+      const match = /^\s*q\s*=\s*([0-9.]+)\s*$/i.exec(parameter);
+      if (match !== null) weight = Number(match[1]);
+    }
+    if (!Number.isFinite(weight)) weight = 0;
+    weights.set(name === 'x-gzip' ? 'gzip' : name, weight);
+  }
+  const anyOther = weights.get('*') ?? 0;
+  const brotliWeight = weights.get('br') ?? anyOther;
+  const gzipWeight = weights.get('gzip') ?? anyOther;
+  if (brotliWeight > 0 && brotliWeight >= gzipWeight) return 'br';
+  if (gzipWeight > 0) return 'gzip';
+  return 'identity';
+}
+
+/**
+ * Whether bytes of this type get smaller when compressed. Text, JSON, scripts and SVG do. Pictures
+ * and fonts are compressed already, so compressing them again only spends time.
+ */
+export function isCompressibleContentType(contentType: string): boolean {
+  const type = (contentType.split(';')[0] ?? '').trim().toLowerCase();
+  return type.startsWith('text/')
+    || type === 'application/json'
+    || type === 'application/javascript'
+    || type === 'image/svg+xml';
+}
+
+const compressWithBrotli = promisify(brotliCompress);
+const compressWithGzip = promisify(gzip);
+
+/**
+ * How hard to work. An answer is compressed every time it is asked for, so it gets a quick setting:
+ * a 3.5 MB run comes down to about a tenth in about 50 milliseconds. A page's file is compressed
+ * once and kept, so it gets the slowest, smallest setting.
+ */
+type CompressionEffort = 'for-an-answer' | 'for-a-kept-file';
+
+/** The bytes compressed in the given encoding, off the main thread. */
+async function compressBytes(body: Buffer, encoding: 'br' | 'gzip', effort: CompressionEffort): Promise<Buffer> {
+  if (encoding === 'gzip') return compressWithGzip(body, { level: effort === 'for-an-answer' ? 6 : 9 });
+  return compressWithBrotli(body, {
+    params: {
+      [zlibConstants.BROTLI_PARAM_QUALITY]: effort === 'for-an-answer' ? 5 : zlibConstants.BROTLI_MAX_QUALITY,
+      [zlibConstants.BROTLI_PARAM_MODE]: zlibConstants.BROTLI_MODE_TEXT,
+      [zlibConstants.BROTLI_PARAM_SIZE_HINT]: body.length,
+    },
+  });
+}
+
+/**
+ * The page files already compressed, by path, encoding, size and time of change, so a file is
+ * compressed once per build. A rebuilt file has a new time and is compressed afresh. The folder is
+ * the built pages, a few hundred kilobytes, so the memory this holds stays small.
+ */
+const compressedFiles = new Map<string, Buffer>();
+
+async function compressedFile(file: StaticFile, encoding: 'br' | 'gzip'): Promise<Buffer> {
+  const key = `${encoding}\u0000${file.modifiedMilliseconds}\u0000${file.body.length}\u0000${file.path}`;
+  const kept = compressedFiles.get(key);
+  if (kept !== undefined) return kept;
+  const made = await compressBytes(file.body, encoding, 'for-a-kept-file');
+  for (const earlierKey of compressedFiles.keys()) {
+    if (earlierKey.startsWith(`${encoding}\u0000`) && earlierKey.endsWith(`\u0000${file.path}`)) compressedFiles.delete(earlierKey);
+  }
+  compressedFiles.set(key, made);
+  return made;
+}
+
+/**
+ * Sends a JSON answer, compressed in the encoding given where it is large enough to be worth it.
+ * The value is serialised and compressed before any header is written. Where the encoding was read
+ * from the request, the answer says it varies by Accept-Encoding, so a cache in between never hands
+ * a compressed answer to a browser that cannot read it.
+ */
+async function sendJson(response: ServerResponse, status: number, value: unknown, encoding: ContentEncoding = 'identity', variesByEncoding = false): Promise<void> {
+  const plain = Buffer.from(JSON.stringify(value), 'utf8');
+  const compress = encoding !== 'identity' && plain.length >= SMALLEST_BODY_WORTH_COMPRESSING;
+  const body = compress ? await compressBytes(plain, encoding, 'for-an-answer') : plain;
+  const headers: Record<string, string | number> = { 'content-type': 'application/json; charset=utf-8', 'content-length': body.length };
+  if (compress) headers['content-encoding'] = encoding;
+  if (variesByEncoding) headers['vary'] = 'Accept-Encoding';
+  response.writeHead(status, headers);
   response.end(body);
 }
 
-function sendRefusal(response: ServerResponse, status: number, sentence: string): void {
+/** Sends a JSON answer in the encoding the request accepts. */
+function sendJsonTo(request: IncomingMessage, response: ServerResponse, status: number, value: unknown): Promise<void> {
+  return sendJson(response, status, value, encodingAcceptedBy(request.headers['accept-encoding']), true);
+}
+
+function sendRefusal(request: IncomingMessage, response: ServerResponse, status: number, sentence: string): Promise<void> {
   const answer: WireAnswer<never> = { ok: false, refusal: sentence };
-  sendJson(response, status, answer);
+  return sendJsonTo(request, response, status, answer);
 }
 
 /**
@@ -151,30 +265,30 @@ export function bodyTooLargeSentence(largestBytes: number): string {
 async function serveOperation(settings: ServerSettings, request: IncomingMessage, response: ServerResponse, path: string): Promise<void> {
   const name = path.slice(OPERATION_ROUTE_PREFIX.length);
   if (!isOperationName(name)) {
-    sendRefusal(response, 404, `There is no operation called "${name}".`);
+    await sendRefusal(request, response, 404, `There is no operation called "${name}".`);
     return;
   }
   if (request.method !== 'POST') {
     response.setHeader('allow', 'POST');
-    sendRefusal(response, 405, `An operation is called with POST, not ${request.method ?? 'nothing'}.`);
+    await sendRefusal(request, response, 405, `An operation is called with POST, not ${request.method ?? 'nothing'}.`);
     return;
   }
   if (!isJsonContentType(request)) {
-    sendRefusal(response, 415, 'An operation takes a JSON body, sent as application/json.');
+    await sendRefusal(request, response, 415, 'An operation takes a JSON body, sent as application/json.');
     return;
   }
   const parsed = parseJsonBody(await readBody(request, largestBodyBytesFor(name)));
   if (!parsed.ok) {
-    sendRefusal(response, 400, 'The request body is not readable JSON.');
+    await sendRefusal(request, response, 400, 'The request body is not readable JSON.');
     return;
   }
   try {
     // Over the web routes the caller holds the token and is the author.
     const answer = await runOperation(settings.store, name, parsed.value, 'author');
-    sendJson(response, 200, { ok: true, answer });
+    await sendJsonTo(request, response, 200, { ok: true, answer });
   } catch (error) {
     if (error instanceof Refusal) {
-      sendRefusal(response, 400, error.message);
+      await sendRefusal(request, response, 400, error.message);
       return;
     }
     throw error;
@@ -186,7 +300,7 @@ async function serveMcp(settings: ServerSettings, request: IncomingMessage, resp
   if (request.method === 'POST') {
     const parsed = parseJsonBody(await readBody(request, LARGEST_BODY_BYTES));
     if (!parsed.ok) {
-      sendJson(response, 400, { jsonrpc: '2.0', error: { code: -32700, message: 'The request body is not readable JSON.' }, id: null });
+      await sendJson(response, 400, { jsonrpc: '2.0', error: { code: -32700, message: 'The request body is not readable JSON.' }, id: null });
       return;
     }
     parsedBody = parsed.value;
@@ -203,18 +317,26 @@ async function serveStatic(settings: ServerSettings, request: IncomingMessage, r
     response.end('Not found.');
     return;
   }
-  response.writeHead(200, { 'content-type': file.contentType, 'content-length': file.body.length });
-  response.end(request.method === 'HEAD' ? undefined : file.body);
+  // A HEAD gets the same headers as a GET, the compressed length among them, and no body.
+  const encoding = isCompressibleContentType(file.contentType) && file.body.length >= SMALLEST_BODY_WORTH_COMPRESSING
+    ? encodingAcceptedBy(request.headers['accept-encoding'])
+    : 'identity';
+  const body = encoding === 'identity' ? file.body : await compressedFile(file, encoding);
+  const headers: Record<string, string | number> = { 'content-type': file.contentType, 'content-length': body.length };
+  if (encoding !== 'identity') headers['content-encoding'] = encoding;
+  if (isCompressibleContentType(file.contentType)) headers['vary'] = 'Accept-Encoding';
+  response.writeHead(200, headers);
+  response.end(request.method === 'HEAD' ? undefined : body);
 }
 
 async function handleRequest(settings: ServerSettings, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const path = readRequestPath(request);
   if (path === null) {
-    sendRefusal(response, 400, 'The address of this request could not be read.');
+    await sendRefusal(request, response, 400, 'The address of this request could not be read.');
     return;
   }
   if (path === '/health') {
-    sendJson(response, 200, { ok: true, build: buildStampFromEnvironment(process.env) });
+    await sendJsonTo(request, response, 200, { ok: true, build: buildStampFromEnvironment(process.env) });
     return;
   }
   const isApi = path === '/api' || path.startsWith('/api/');
@@ -224,7 +346,7 @@ async function handleRequest(settings: ServerSettings, request: IncomingMessage,
     const letIn = isMcp ? carriesATokenForStories(request.headers, settings) : carriesTheToken(request.headers, settings);
     if (!letIn) {
       response.setHeader('www-authenticate', 'Bearer');
-      sendRefusal(response, 401, 'This server needs the access token, as "Authorization: Bearer <token>".');
+      await sendRefusal(request, response, 401, 'This server needs the access token, as "Authorization: Bearer <token>".');
       return;
     }
     if (isMcp) {
@@ -235,7 +357,7 @@ async function handleRequest(settings: ServerSettings, request: IncomingMessage,
       await serveOperation(settings, request, response, path);
       return;
     }
-    sendRefusal(response, 404, `There is nothing at ${path}.`);
+    await sendRefusal(request, response, 404, `There is nothing at ${path}.`);
     return;
   }
   await serveStatic(settings, request, response, path);
@@ -247,14 +369,14 @@ async function handleWithNothingEscaping(settings: ServerSettings, request: Inco
     await handleRequest(settings, request, response);
   } catch (error) {
     if (error instanceof TooManyObjectsAndLists) {
-      if (!response.headersSent) sendRefusal(response, 413, TOO_MANY_OBJECTS_AND_LISTS_SENTENCE);
+      if (!response.headersSent) await sendRefusal(request, response, 413, TOO_MANY_OBJECTS_AND_LISTS_SENTENCE);
       else response.destroy();
       return;
     }
     if (error instanceof BodyTooLarge) {
       if (!response.headersSent) {
         response.setHeader('connection', 'close');
-        sendRefusal(response, 413, bodyTooLargeSentence(error.largestBytes));
+        await sendRefusal(request, response, 413, bodyTooLargeSentence(error.largestBytes));
       } else {
         response.destroy();
       }
@@ -266,7 +388,7 @@ async function handleWithNothingEscaping(settings: ServerSettings, request: Inco
       return;
     }
     try {
-      sendJson(response, 500, { ok: false, refusal: 'The server failed while answering. Nothing was refused on purpose.' });
+      await sendJsonTo(request, response, 500, { ok: false, refusal: 'The server failed while answering. Nothing was refused on purpose.' });
     } catch {
       response.destroy();
     }

@@ -14,6 +14,8 @@
   --author-only-ink: #5c3d00;
   --focus: #1f5f8b;
   --measure: 42rem;
+  /* Lists, tables and forms take a wider frame than prose. */
+  --wide-measure: 60rem;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -66,17 +68,60 @@ code { font-size: 0.9em; }
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.25rem 1rem;
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
 .masthead-name { font-weight: bold; text-decoration: none; color: var(--ink); }
-.masthead-note { color: var(--ink-quiet); font-size: 0.875rem; flex: 1; }
+.masthead-link { font-family: system-ui, sans-serif; font-size: 0.875rem; }
 
+/* The first thing a keyboard reaches; out of sight until it has focus. */
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -10rem;
+  z-index: 20;
+  padding: 0.5rem 0.9rem;
+  background: var(--surface);
+  border: 2px solid var(--focus);
+  border-radius: 4px;
+}
+.skip-link:focus { top: 0.5rem; }
+
+/* The page column is as wide as a list needs; prose inside it keeps the reading measure. */
 .page {
-  max-width: var(--measure);
+  max-width: var(--wide-measure);
   margin: 0 auto;
-  padding: 1rem;
+  padding: 0 1rem 1rem;
+}
+.page:focus { outline: none; }
+.page > :not(.run-page) { max-width: var(--measure); }
+.run-page > .section-prose { max-width: var(--measure); }
+
+.page-foot {
+  max-width: var(--wide-measure);
+  margin: 2rem auto 0;
+  padding: 0.75rem 1rem 1.5rem;
+  border-top: 1px solid var(--line);
+}
+
+/* The run's heading is one line: its title and a quiet mark. */
+.run-heading-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.6rem;
+  margin: 0.6rem 0 0.2rem;
+}
+.run-title { font-size: 1.35rem; margin: 0; }
+.run-status-mark {
+  font-family: system-ui, sans-serif;
+  font-size: 0.75rem;
+  color: var(--ink-quiet);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 0.45rem;
+  white-space: nowrap;
 }
 
 .quiet { color: var(--ink-quiet); }
@@ -104,27 +149,55 @@ code { font-size: 0.9em; }
 .facts-row dt { font-size: 0.8125rem; color: var(--ink-quiet); }
 .facts-row dd { margin: 0; }
 
+/*
+ * The section tabs: one row that stays at the top of the screen while the page scrolls under it.
+ * On a phone the row scrolls sideways inside itself and never wraps onto a second line.
+ */
+.section-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--ground);
+  border-bottom: 1px solid var(--line);
+  margin: 0 -1rem;
+  padding: 0 1rem;
+}
 .section-tabs ul {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.35rem;
   list-style: none;
-  padding: 0;
-  margin: 1rem 0;
+  padding: 0.45rem 0;
+  margin: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
+.section-tabs li { flex: none; }
 .section-tabs a {
   display: inline-block;
-  padding: 0.35rem 0.7rem;
+  padding: 0.3rem 0.7rem;
   border: 1px solid var(--line);
   border-radius: 999px;
   text-decoration: none;
   background: var(--surface);
+  white-space: nowrap;
+  font-family: system-ui, sans-serif;
+  font-size: 0.9375rem;
 }
+/* The current tab has an underline besides its fill, so it is told apart without colour. */
 .section-tabs a[aria-current='page'] {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--ground);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.25em;
 }
+/* A heading reached by a tab, a skip link or focus is not left hidden under the tabs. */
+.run-page h2, .run-page h3 { scroll-margin-top: 4rem; }
+.section-heading { margin-top: 1rem; }
+.section-heading:focus { outline: none; }
+.section-heading:focus-visible { outline: 3px solid var(--focus); }
 .count-badge { font-size: 0.875rem; }
 
 .struck-takes { margin-top: 0.5rem; }
