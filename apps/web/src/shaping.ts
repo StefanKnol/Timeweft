@@ -560,8 +560,20 @@ export function outcomeOfResponse<Answer>(status: number, bodyText: string): Cal
 // ---------------------------------------------------------------------------------------------
 // Routes
 
-export const RUN_SECTIONS = ['scenes', 'entries', 'rulings', 'threads', 'journeys', 'collisions', 'briefing'] as const;
+export const RUN_SECTIONS = ['scenes', 'entries', 'rulings', 'threads', 'journeys', 'collisions', 'briefing', 'run'] as const;
 export type RunSection = (typeof RUN_SECTIONS)[number];
+
+/** Each section's name, as its tab and its heading say it. */
+export const SECTION_TITLES: Record<RunSection, string> = {
+  scenes: 'Scenes',
+  entries: 'People, places and things',
+  rulings: 'Rulings',
+  threads: 'Threads',
+  journeys: 'Waypoints and journeys',
+  collisions: 'Collisions',
+  briefing: 'The briefing',
+  run: 'About this run',
+};
 
 export type Route =
   | { page: 'runs' }
@@ -580,6 +592,58 @@ export function hashOfRoute(route: Route): string {
   if (route.page === 'runs') return '#/runs';
   const base = `#/runs/${encodeURIComponent(route.slug)}/${route.section}`;
   return route.itemId === null ? base : `${base}/${encodeURIComponent(route.itemId)}`;
+}
+
+/**
+ * What the browser tab says for a route: the item open, then the section, then the run, most
+ * particular first so a row of tabs still tells them apart. `snapshot` is null while the run is
+ * being read, and then the run's handle stands in for its title.
+ */
+export function titleOfRoute(route: Route, snapshot: RunSnapshot | null): string {
+  if (route.page === 'runs') return 'All runs · Timeweft';
+  const runTitle = snapshot === null ? route.slug : snapshot.run.title;
+  const sectionAndRun = `${SECTION_TITLES[route.section]} · ${runTitle}`;
+  if (route.itemId === null || snapshot === null) return sectionAndRun;
+  const itemWords = itemOfRouteInWords(route.section, route.itemId, snapshot);
+  return itemWords === null ? sectionAndRun : `${itemWords} · ${sectionAndRun}`;
+}
+
+const LONGEST_ITEM_WORDS_IN_A_TITLE = 60;
+
+function itemOfRouteInWords(section: RunSection, itemId: string, snapshot: RunSnapshot): string | null {
+  switch (section) {
+    case 'scenes': {
+      // A scene may be named by its number (the standing take) or by its id (any take).
+      const scene = /^\d+$/.test(itemId)
+        ? snapshot.scenes.find((candidate) => candidate.number === Number(itemId) && candidate.status === 'standing')
+        : snapshot.scenes.find((candidate) => candidate.id === itemId);
+      if (scene === undefined) return null;
+      const struckWords = scene.status === 'struck' ? ' (struck take)' : '';
+      return `${scene.number}. ${scene.title}${struckWords}`;
+    }
+    case 'entries': {
+      const entry = snapshot.entries.find((candidate) => candidate.id === itemId);
+      return entry === undefined ? null : entry.name;
+    }
+    case 'rulings': {
+      const ruling = snapshot.rulings.find((candidate) => candidate.id === itemId);
+      return ruling === undefined ? null : `Ruling ${ruling.number}`;
+    }
+    case 'threads': {
+      const thread = snapshot.threads.find((candidate) => candidate.id === itemId);
+      return thread === undefined ? null : shortenedForATitle(thread.text);
+    }
+    default:
+      return null;
+  }
+}
+
+function shortenedForATitle(text: string): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  if (oneLine.length <= LONGEST_ITEM_WORDS_IN_A_TITLE) return oneLine;
+  const cut = oneLine.slice(0, LONGEST_ITEM_WORDS_IN_A_TITLE);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${(lastSpace > 20 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
 }
 
 function safelyDecoded(part: string): string {
