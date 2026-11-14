@@ -10,7 +10,8 @@
     "check-no-canon": "node scripts/check-no-canon.mjs",
     "export-run": "pnpm --silent --filter @timeweft/server export-run",
     "export-all": "pnpm --silent --filter @timeweft/server export-all",
-    "restore-run": "pnpm --silent --filter @timeweft/server restore-run"
+    "restore-run": "pnpm --silent --filter @timeweft/server restore-run",
+    "seed-demo-run": "pnpm --silent --filter @timeweft/server seed-demo-run"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
