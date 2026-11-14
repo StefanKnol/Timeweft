@@ -15,7 +15,7 @@ import {
   EMPTY_FACT_FORM,
   LARGEST_BACKUP_FILE_BYTES_READ, LARGEST_RESTORE_BODY_BYTES, REPLACE_ON_RESTORE_SENTENCE, bodyBytesOf, backupDownloadOf, restoreButtonText, restoreToSend,
   restoredInWords, runRowCountsInWords, whyBackupFileCannotStart,
-  megabytesInWords,
+  megabytesInWords, RUN_SECTIONS, titleOfRoute,
 } from './shaping.ts';
 import { RUN_EXPORT_TABLE_NAMES, runExportDocumentAsText, type RestoredRunReport, type RunExportDocument, type RunExportRowCounts, type RunRecord } from '@timeweft/contract';
 
@@ -375,6 +375,47 @@ test('routes read and write the address after the hash, and anything strange is 
   const route = { page: 'run', slug: 'the-mill', section: 'scenes', itemId: 'a b/c' } as const;
   assert.deepEqual(routeFromHash(hashOfRoute(route)), route);
   assert.equal(hashOfRoute({ page: 'runs' }), '#/runs');
+});
+
+test('the run section has an address of its own, and it round trips', () => {
+  assert.ok(RUN_SECTIONS.includes('run'));
+  assert.deepEqual(routeFromHash('#/runs/the-mill/run'), { page: 'run', slug: 'the-mill', section: 'run', itemId: null });
+  const route = { page: 'run', slug: 'the-mill', section: 'run', itemId: null } as const;
+  assert.equal(hashOfRoute(route), '#/runs/the-mill/run');
+  assert.deepEqual(routeFromHash(hashOfRoute(route)), route);
+});
+
+test('the browser tab names the item open, then the section, then the run', () => {
+  const snapshot = demoSnapshot();
+  const runRoute = (section: (typeof RUN_SECTIONS)[number], itemId: string | null) => ({ page: 'run', slug: 'the-mill', section, itemId }) as const;
+  assert.equal(titleOfRoute({ page: 'runs' }, null), 'All runs · Timeweft');
+  // While the run is read its handle stands in for its title.
+  assert.equal(titleOfRoute(runRoute('scenes', null), null), 'Scenes · the-mill');
+  assert.equal(titleOfRoute(runRoute('scenes', null), snapshot), 'Scenes · The mill');
+  assert.equal(titleOfRoute(runRoute('entries', null), snapshot), 'People, places and things · The mill');
+  assert.equal(titleOfRoute(runRoute('rulings', null), snapshot), 'Rulings · The mill');
+  assert.equal(titleOfRoute(runRoute('threads', null), snapshot), 'Threads · The mill');
+  assert.equal(titleOfRoute(runRoute('journeys', null), snapshot), 'Waypoints and journeys · The mill');
+  assert.equal(titleOfRoute(runRoute('collisions', null), snapshot), 'Collisions · The mill');
+  assert.equal(titleOfRoute(runRoute('briefing', null), snapshot), 'The briefing · The mill');
+  assert.equal(titleOfRoute(runRoute('run', null), snapshot), 'About this run · The mill');
+  // A scene by its number is the standing take; by its id it is whichever take that is.
+  assert.equal(titleOfRoute(runRoute('scenes', '2'), snapshot), '2. Scene s2 · Scenes · The mill');
+  assert.equal(titleOfRoute(runRoute('scenes', 's3'), snapshot), '3. Scene s3 · Scenes · The mill');
+  assert.equal(titleOfRoute(runRoute('scenes', 's2-old'), snapshot), '2. Scene s2-old (struck take) · Scenes · The mill');
+  assert.equal(titleOfRoute(runRoute('entries', 'miller'), snapshot), 'the miller · People, places and things · The mill');
+  assert.equal(titleOfRoute(runRoute('rulings', 'r2'), snapshot), 'Ruling 2 · Rulings · The mill');
+  assert.equal(titleOfRoute(runRoute('threads', 't-early'), snapshot), 'Where does the ferry go at night? · Threads · The mill');
+  // Something the run does not hold names only the section.
+  assert.equal(titleOfRoute(runRoute('scenes', '900'), snapshot), 'Scenes · The mill');
+  assert.equal(titleOfRoute(runRoute('entries', 'nobody'), snapshot), 'People, places and things · The mill');
+});
+
+test('a long thread is cut on a word in the tab title', () => {
+  const snapshot = demoSnapshot();
+  snapshot.threads.push(thread('t-long', 'Whether the miller ever learns who left the lantern burning at the ford on the night of the flood', 's1', null, '2026-01-01T00:00:08Z'));
+  const title = titleOfRoute({ page: 'run', slug: 'the-mill', section: 'threads', itemId: 't-long' }, snapshot);
+  assert.equal(title, 'Whether the miller ever learns who left the lantern burning… · Threads · The mill');
 });
 
 test('a thread is closed by the scene that closed it, not by having a resolution written', () => {
