@@ -103,7 +103,13 @@ function SectionTabs({ route, snapshot, scrollToHeadingWhenDrawn }: {
                 }}
               >
                 {SECTION_TITLES[section]}
-                {section === 'collisions' && waiting > 0 && <span className="count-badge"> {waiting} waiting</span>}
+                {section === 'collisions' && waiting > 0 && (
+                  <>
+                    {' '}
+                    <span className="count-badge" title={`${waiting} waiting for you`}>{waiting}</span>
+                    <span className="visually-hidden"> waiting</span>
+                  </>
+                )}
               </a>
             </li>
           );

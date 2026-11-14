@@ -165,7 +165,7 @@ code { font-size: 0.9em; }
 .section-tabs ul {
   display: flex;
   flex-wrap: nowrap;
-  gap: 0.3rem;
+  gap: 0.25rem;
   list-style: none;
   padding: 0.45rem 0;
   margin: 0;
@@ -173,9 +173,14 @@ code { font-size: 0.9em; }
   scrollbar-width: thin;
 }
 .section-tabs li { flex: none; }
+/* Where the screen has room past the column, the row may use a little of it, so all eight tabs
+   show on a desktop without scrolling sideways. */
+@media (min-width: 68rem) {
+  .section-tabs ul { margin-right: -4rem; }
+}
 .section-tabs a {
   display: inline-block;
-  padding: 0.3rem 0.6rem;
+  padding: 0.3rem 0.55rem;
   border: 1px solid var(--line);
   border-radius: 999px;
   text-decoration: none;
@@ -198,7 +203,18 @@ code { font-size: 0.9em; }
 .section-heading { margin-top: 1rem; }
 .section-heading:focus { outline: none; }
 .section-heading:focus-visible { outline: 3px solid var(--focus); }
-.count-badge { font-size: 0.875rem; }
+.count-badge {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 0.35em;
+  border-radius: 999px;
+  background: var(--attention);
+  color: var(--surface);
+  font-size: 0.8125rem;
+  font-weight: bold;
+  line-height: 1.4;
+  text-align: center;
+}
 
 .struck-takes { margin-top: 0.5rem; }
 .struck-takes summary { cursor: pointer; color: var(--ink-quiet); }
