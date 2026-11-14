@@ -105,7 +105,7 @@ test('a version this server does not read is refused with the versions it does r
   const document = await exportOverHttp();
   const { status, body } = await running.call('restore_run', { document: { ...document, formatVersion: 99 } });
   assert.equal(status, 400);
-  assert.match(body.refusal ?? '', /version 1/);
+  assert.match(body.refusal ?? '', /versions 1 and 2/);
   const notABackup = await running.call('restore_run', { document: { formatName: 'something-else', formatVersion: 1 } });
   assert.equal(notABackup.status, 400);
 });

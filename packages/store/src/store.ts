@@ -18,16 +18,18 @@ import {
   Refusal, type CollisionRecord, type EntryRecord, type EntryWritten, type FactRecord, type InputOf, type RulingRecord,
   type RunListing, type RunRecord, type RunSnapshot, type SavedScene, type SceneInput, type Source, type Store,
   type ThreadRecord, type Visibility, type ImportedRun, type ClockReading, type ReplacedImport, type WaypointRecord,
-  type RestoredRunReport, type RunExportDocument, RunAlreadyExists,
+  type RestoredRunReport, type RunExportDocument, RunAlreadyExists, type RunOutline, type SceneSearchResult, type SceneText,
+  SCENE_FIELDS_THE_AUTHOR_EDITS, type EditedScene, type SceneFieldTheAuthorEdits,
 } from '@timeweft/contract';
 import type { Database } from './database.ts';
 import { applyMigrations, WRITE_MARKS } from './migrations.ts';
 import { NameIndex, normaliseName, normaliseProperty } from './names.ts';
 import {
-  collisionFromRow, entryFromRow, factFromRow, rulingFromRow, runFromRow, sceneFromRow, waypointFromRow,
+  collisionFromRow, entryFromRow, factFromRow, rulingFromRow, runFromRow, sceneEditFromRow, sceneFromRow, waypointFromRow,
   type EntryRow, type FactRow, type RunRow, type SceneRow,
 } from './rows.ts';
-import { filterForStory, readThreadRecords, readWholeRun } from './snapshot.ts';
+import { filterForStory, outlineOfSnapshot, readThreadRecords, readWholeRun } from './snapshot.ts';
+import { readSceneText, searchScenesIn } from './scene-text.ts';
 import { importRunInto } from './import.ts';
 import { markRunAsImported, replaceImportedRunIn } from './replace-imported-run.ts';
 import { exactCount, looksLikeAnId } from './checks.ts';
@@ -123,6 +125,18 @@ export class PostgresStore implements Store {
     return audience === 'author' ? whole : filterForStory(whole);
   }
 
+  async outlineOf(runSlug: string): Promise<RunOutline> {
+    return outlineOfSnapshot(await this.snapshotOf(runSlug, 'author'));
+  }
+
+  async sceneTextOf(input: InputOf<'read_scene_text'>): Promise<SceneText> {
+    return readSceneText(this.database, input);
+  }
+
+  async searchScenes(input: InputOf<'search_scenes'>): Promise<SceneSearchResult> {
+    return searchScenesIn(this.database, input);
+  }
+
   async saveScene(input: InputOf<'save_scene'>): Promise<SavedScene> {
     return this.writeInRun(input.run, (transaction, run) => writeScene(transaction, run, input, null));
   }
@@ -139,8 +153,15 @@ export class PostgresStore implements Store {
       if (target.id !== newest.id) {
         throw new Refusal(`Only the newest scene can be redone, and that is scene ${newest.number}. Scene ${input.number} has scenes after it that may rest on it.`);
       }
+      const editsOnTheStruckTake = await transaction.selectFrom('scene_edits').select(sql<number>`count(*)::int`.as('count'))
+        .where('scene_id', '=', target.id).executeTakeFirstOrThrow();
       await strikeScene(transaction, target);
-      return writeScene(transaction, run, input, target);
+      const saved = await writeScene(transaction, run, input, target);
+      if (editsOnTheStruckTake.count > 0) {
+        const edits = editsOnTheStruckTake.count === 1 ? '1 edit' : `${editsOnTheStruckTake.count} edits`;
+        saved.cautions.push(`The struck take carried ${edits} by the author; ${editsOnTheStruckTake.count === 1 ? 'it stays' : 'they stay'} with it.`);
+      }
+      return saved;
     });
   }
 
@@ -464,6 +485,52 @@ export class PostgresStore implements Store {
     });
   }
 
+  async editScene(input: InputOf<'edit_scene'>): Promise<EditedScene> {
+    return this.writeInRun(input.run, async (transaction, run) => {
+      const scene = looksLikeAnId(input.sceneId)
+        ? await transaction.selectFrom('scenes').selectAll().where('id', '=', input.sceneId).where('run_id', '=', run.id).executeTakeFirst()
+        : undefined;
+      if (scene === undefined) throw new Refusal(`The run "${run.slug}" holds no scene with the id "${input.sceneId}".`);
+      if (scene.status !== 'standing') {
+        throw new Refusal(`A struck take is kept as it was; edit the standing take of scene ${scene.number}.`);
+      }
+      const given: Record<TextFieldOfAScene, string | undefined> = {
+        title: input.title === undefined ? undefined : wordsGiven(input.title, 'A title'),
+        summary: input.summary, whenTyped: input.whenTyped, record: input.record, steer: input.steer, situationAfter: input.situationAfter,
+      };
+      const changes: SceneChange[] = [];
+      for (const field of SCENE_FIELDS_THE_AUTHOR_EDITS) {
+        if (field === 'placeEntryId') {
+          if (input.placeEntryId === undefined) continue;
+          const later = input.placeEntryId === null ? null : await placeTheSceneMayBeSetAt(transaction, run.id, input.placeEntryId);
+          if (later !== scene.place_entry_id) changes.push({ field, earlier: scene.place_entry_id ?? '', later: later ?? '' });
+        } else if (field === 'starred') {
+          if (input.starred !== undefined && input.starred !== scene.starred) {
+            changes.push({ field, earlier: String(scene.starred), later: String(input.starred) });
+          }
+        } else {
+          const later = given[field];
+          const earlier = scene[SCENE_COLUMN_BY_FIELD[field]];
+          if (later !== undefined && later !== earlier) changes.push({ field, earlier, later });
+        }
+      }
+      if (changes.length === 0) throw new Refusal(`Nothing given differs from what scene ${scene.number} holds, so nothing was changed.`);
+      const newest = await newestStandingScene(transaction, run.id);
+      const edits = await transaction.insertInto('scene_edits').values(changes.map((change) => ({
+        id: randomUUID(), run_id: run.id, scene_id: scene.id, field: change.field,
+        earlier_value: change.earlier, later_value: change.later, after_scene_id: newest?.id ?? null,
+      }))).returningAll().execute();
+      const update = Object.fromEntries(changes.map((change) => [SCENE_COLUMN_BY_FIELD[change.field], columnValueOf(change)]));
+      const edited = await transaction.updateTable('scenes').set(update).where('id', '=', scene.id).returningAll().executeTakeFirstOrThrow();
+      const readings = await transaction.selectFrom('scene_readings').selectAll().where('scene_id', '=', scene.id).orderBy('position').execute();
+      return {
+        scene: sceneFromRow(edited, readings.map((reading) => ({ clockId: reading.clock_id, count: reading.count, partOfDay: reading.part_of_day }))),
+        fieldsChanged: changes.map((change) => change.field),
+        edits: edits.map(sceneEditFromRow),
+      };
+    });
+  }
+
   async importRun(run: ImportedRun): Promise<RunSnapshot> {
     await this.database.transaction().execute(async (transaction) => {
       const existing = await transaction.selectFrom('runs').select(['id', 'imported_through']).where('slug', '=', run.slug).executeTakeFirst();
@@ -589,6 +656,43 @@ function entryNamedOrById(
   if (name !== undefined) return names.resolve(name, where);
   if (required) throw new Refusal(`Name the entry ${where}, by its name or by its id.`);
   return null;
+}
+
+type TextFieldOfAScene = 'title' | 'summary' | 'whenTyped' | 'record' | 'steer' | 'situationAfter';
+
+/** One field of a saved scene changed, both values as a history row keeps them (text). */
+interface SceneChange {
+  field: SceneFieldTheAuthorEdits;
+  earlier: string;
+  later: string;
+}
+
+const SCENE_COLUMN_BY_FIELD = {
+  title: 'title', summary: 'summary', whenTyped: 'when_typed', placeEntryId: 'place_entry_id', record: 'record',
+  steer: 'steer', situationAfter: 'situation_after', starred: 'starred',
+} as const satisfies Record<SceneFieldTheAuthorEdits, string>;
+
+/** A change's later value as the scene's column keeps it: a place as an id or nothing, a star as true or false. */
+function columnValueOf(change: SceneChange): string | boolean | null {
+  if (change.field === 'starred') return change.later === 'true';
+  if (change.field === 'placeEntryId') return change.later === '' ? null : change.later;
+  return change.later;
+}
+
+/**
+ * The id of an entry a scene may be set at: an entry of this run, author-only ones included, that a
+ * redo has not taken back. Anything else is refused by name.
+ */
+async function placeTheSceneMayBeSetAt(database: Kysely<Database>, runId: string, entryId: string): Promise<string> {
+  const entry = looksLikeAnId(entryId)
+    ? await database.selectFrom('entries').select(['id', 'name']).where('id', '=', entryId).where('run_id', '=', runId).executeTakeFirst()
+    : undefined;
+  if (entry === undefined) throw new Refusal(`This run has no entry with the id "${entryId}" for the scene to be set at.`);
+  const names = await liveEntryIndex(database, runId, 'author');
+  if (names.byId(entry.id) === null) {
+    throw new Refusal(`"${entry.name}" was introduced by a scene that has since been redone, and the new take took it back, so no scene can be set at it.`);
+  }
+  return entry.id;
 }
 
 interface EntryChange {
@@ -1051,7 +1155,8 @@ async function moveOutsideReferencesOntoTheNewTake(database: Kysely<Database>, s
   await database.updateTable('threads').set({ opened_in_scene_id: newId }).where('opened_in_scene_id', '=', struckId).where(notFromTheTake).execute();
   await database.updateTable('rulings').set({ withdrawn_in_scene_id: newId }).where('withdrawn_in_scene_id', '=', struckId).where(notFromTheTake).execute();
   await database.updateTable('waypoints').set({ withdrawn_in_scene_id: newId }).where('withdrawn_in_scene_id', '=', struckId).execute();
-  for (const table of ['run_edits', 'entry_edits', 'waypoint_rewordings'] as const) {
+  // A scene edit stays on the take it was made to, struck or not; only its date moves.
+  for (const table of ['run_edits', 'entry_edits', 'waypoint_rewordings', 'scene_edits'] as const) {
     await database.updateTable(table as 'run_edits').set({ after_scene_id: newId }).where('after_scene_id', '=', struckId).execute();
   }
 }

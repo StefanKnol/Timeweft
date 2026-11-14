@@ -48,9 +48,13 @@ naming that run's slug: restore it first.
 
 ## Versions
 
-`formatVersion` is 1. A migration that adds, drops or changes a column of a run table raises it and
+`formatVersion` is 2. A migration that adds, drops or changes a column of a run table raises it and
 adds a reader for the version before, so an old backup always restores. A version the server does
 not read is refused, naming the versions it reads.
+
+- Version 1 is the first.
+- Version 2 adds `scene_edits` (the author's changes to a saved scene, 0005). A version 1 backup
+  holds no such list and is read as holding none; one that holds rows of it is refused as edited.
 
 ## How the completeness test finds the tables
 

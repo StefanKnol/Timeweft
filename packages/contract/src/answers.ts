@@ -8,8 +8,8 @@
 import type { InputOf } from './operations.ts';
 import type {
   ClockRecord, CollisionRecord, EntryEditRecord, EntryKind, EntryNoteRecord, EntryRecord, FactRecord, Id,
-  JourneyLegRecord, RulingRecord, RulingScope, RunEditRecord, RunRecord, RunSnapshot, RunStatus, SceneRecord,
-  Source, ThreadRecord, Visibility, WaypointRecord, WaypointRewordingRecord,
+  JourneyLegRecord, RulingRecord, RulingScope, RunEditRecord, RunOutline, RunRecord, RunSnapshot, RunStatus, SceneEditRecord,
+  SceneFieldTheAuthorEdits, SceneRecord, SceneStatus, Source, ThreadRecord, Visibility, WaypointRecord, WaypointRewordingRecord,
 } from './records.ts';
 import type { RestoredRunReport, RunExportDocument } from './run-export.ts';
 
@@ -65,6 +65,16 @@ export interface SavedScene {
   cautions: string[];
 }
 
+/** What edit_scene answers with. */
+export interface EditedScene {
+  /** The take as it now stands, its record included. */
+  scene: SceneRecord;
+  /** The fields that changed, in the order of `SCENE_FIELDS_THE_AUTHOR_EDITS`. */
+  fieldsChanged: SceneFieldTheAuthorEdits[];
+  /** The history rows written, one per field changed, each holding the earlier and the later value. */
+  edits: SceneEditRecord[];
+}
+
 export interface EntryLookup {
   entry: EntryRecord;
   /** Every fact that still holds, one per property unless several stand alongside. */
@@ -97,6 +107,42 @@ export interface FoundItem {
   sceneNumber: number | null;
 }
 
+/** One take's record, as `read_scene_text` answers it. */
+export interface SceneText {
+  sceneId: Id;
+  number: number;
+  status: SceneStatus;
+  /** The prose. An empty string where the take holds none. */
+  record: string;
+}
+
+/** The fields of a scene `search_scenes` looks in, in the order it looks. */
+export const SEARCHED_SCENE_FIELDS = ['title', 'summary', 'record', 'steer', 'situationAfter'] as const;
+export type SearchedSceneField = (typeof SEARCHED_SCENE_FIELDS)[number];
+
+/** One scene that holds the text searched for, and where. */
+export interface SceneSearchMatch {
+  sceneId: Id;
+  number: number;
+  status: SceneStatus;
+  title: string;
+  /** The first field, in the order searched, that holds the text. */
+  field: SearchedSceneField;
+  /** About 160 characters of that field around the match, cut on word boundaries, with … where it was cut. */
+  excerpt: string;
+  /** Where the match starts in the excerpt, counted in UTF-16 code units as JavaScript counts them. */
+  matchStart: number;
+  /** How long the match is in the excerpt. */
+  matchLength: number;
+}
+
+export interface SceneSearchResult {
+  /** Newest scene first, at most the limit asked for. */
+  matches: SceneSearchMatch[];
+  /** How many scenes hold the text in all, the ones past the limit included. */
+  total: number;
+}
+
 /**
  * The store's doors. Every write is one transaction. Names are resolved inside the store, by
  * name and other names, case-blind, within the run; where two entries answer to one name the
@@ -113,6 +159,12 @@ export interface Store {
   beginRun(input: InputOf<'begin_run'>): Promise<RunSnapshot>;
   /** Everything the run holds, filtered for the audience. Refuses a slug the store lacks. */
   snapshotOf(runSlug: string, audience: 'story' | 'author'): Promise<RunSnapshot>;
+  /** The author's whole run with each scene's record left out and its length in words given. */
+  outlineOf(runSlug: string): Promise<RunOutline>;
+  /** One take's record, struck takes included. Refuses a scene id the run does not hold. */
+  sceneTextOf(input: InputOf<'read_scene_text'>): Promise<SceneText>;
+  /** Searches every scene's words in the store, for the author. */
+  searchScenes(input: InputOf<'search_scenes'>): Promise<SceneSearchResult>;
 
   saveScene(input: InputOf<'save_scene'>): Promise<SavedScene>;
   redoScene(input: InputOf<'redo_scene'>): Promise<SavedScene>;
@@ -165,6 +217,14 @@ export interface Store {
   renameEntry(input: InputOf<'rename_entry'>): Promise<EntryWritten>;
   /** Turns an entry open or author-only. Only the entry's row changes, and the change is kept. */
   setEntryVisibility(input: InputOf<'set_entry_visibility'>): Promise<EntryWritten>;
+
+  /**
+   * Changes what is given of a standing take's words, place or star, keeping each earlier value as a
+   * history row dated after the newest standing scene. The take keeps its id; nothing it established
+   * is touched. Refuses a struck take, a scene the run lacks, an edit that changes nothing, a blank
+   * title, and a place that is not an entry of the run or that a redo took back.
+   */
+  editScene(input: InputOf<'edit_scene'>): Promise<EditedScene>;
 
   /** Write a whole run read from files, in one transaction. Refuses a slug already there with `RunAlreadyExists`. */
   importRun(run: ImportedRun): Promise<RunSnapshot>;
@@ -335,6 +395,6 @@ export interface WeaverFiles {
 
 export type {
   ClockRecord, CollisionRecord, EntryEditRecord, EntryNoteRecord, EntryRecord, FactRecord, Id, JourneyLegRecord,
-  RulingRecord, RunEditRecord, RunRecord, RunSnapshot, SceneRecord, ThreadRecord, WaypointRecord,
+  RulingRecord, RunEditRecord, RunOutline, RunRecord, RunSnapshot, SceneEditRecord, SceneRecord, ThreadRecord, WaypointRecord,
   WaypointRewordingRecord,
 };

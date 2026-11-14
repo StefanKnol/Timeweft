@@ -90,12 +90,17 @@ export const OPERATION_HANDLERS: { [Name in OperationName]: Handler<Name> } = {
   edit_entry: (store, input) => store.editEntry(input),
   rename_entry: (store, input) => store.renameEntry(input),
   set_entry_visibility: (store, input) => store.setEntryVisibility(input),
+  edit_scene: (store, input) => store.editScene(input),
   list_collisions: async (store, input) => {
     const snapshot = await snapshotForOperation(store, 'list_collisions', input.run);
     return snapshot.collisions.filter((collision) => !input.waitingOnly || collision.state === 'waiting');
   },
   settle_collision: (store, input) => store.settleCollision(input),
-  read_run: (store, input) => snapshotForOperation(store, 'read_run', input.run),
+  // The author's run page: the run without the scenes' prose, which the two reads below fetch and
+  // search. All three are the author's, so none is an MCP tool and a story caller is refused.
+  read_run: (store, input) => store.outlineOf(input.run),
+  read_scene_text: (store, input) => store.sceneTextOf(input),
+  search_scenes: (store, input) => store.searchScenes(input),
   // The author is the only caller and the files are their own, so a refusal from the store, which
   // quotes them, goes back to them as it is.
   import_run: (store, input) => {

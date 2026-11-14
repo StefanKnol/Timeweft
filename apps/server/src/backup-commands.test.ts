@@ -85,7 +85,7 @@ test('a file that is not a backup is refused with a plain sentence', async () =>
   await writeFile(join(folder, 'broken.json'), '{ not json');
   await assert.rejects(readBackupFile(join(folder, 'broken.json')), (error: unknown) => error instanceof Refusal && /not readable JSON/.test(error.message));
   await writeFile(join(folder, 'other.json'), JSON.stringify({ formatName: 'timeweft-run-export', formatVersion: 99, runSlug: 'x', tables: {} }));
-  await assert.rejects(readBackupFile(join(folder, 'other.json')), (error: unknown) => error instanceof Refusal && /version 1/.test(error.message));
+  await assert.rejects(readBackupFile(join(folder, 'other.json')), (error: unknown) => error instanceof Refusal && /versions 1 and 2/.test(error.message));
 });
 
 test('a refusal that quotes a value is said on the console without it', () => {

@@ -4,7 +4,8 @@
  * always plans the same run, and a test can check it without a database.
  *
  * The sizes follow a long real run: by default 420 scenes whose prose runs from 300 to 1500 words,
- * about 300 entries, about 750 rulings, about 210 threads of which 60 are closed. The command in
+ * about 300 entries, about 750 rulings, about 210 threads of which 60 are closed, and a handful of
+ * scenes the author edited by hand once the run was written. The command in
  * seed-demo-run-command.ts writes the plan through the store's own doors.
  */
 import type { EntryKind } from '@timeweft/contract';
@@ -13,7 +14,7 @@ export const DEFAULT_DEMO_SCENES = 420;
 export const DEFAULT_DEMO_SLUG = 'the-long-valley';
 
 /** What the default 420 scenes aim at; a shorter run is scaled down from these. */
-const SIZES_AT_420_SCENES = { entries: 300, rulings: 750, threadsOpened: 210, threadsClosed: 60, authorOnlyEntries: 8, collisions: 3, redoneScenes: 6 };
+const SIZES_AT_420_SCENES = { entries: 300, rulings: 750, threadsOpened: 210, threadsClosed: 60, authorOnlyEntries: 8, collisions: 3, redoneScenes: 6, editedScenes: 6 };
 
 export const SHORTEST_PROSE_WORDS = 300;
 export const LONGEST_PROSE_WORDS = 1500;
@@ -232,12 +233,28 @@ export interface DemoScenePlan {
   };
 }
 
+/**
+ * One edit the author makes by hand to a saved scene, once the whole run is written, named by the
+ * scene's number. Only the fields given change, as `edit_scene` takes them.
+ */
+export interface DemoSceneEdit {
+  number: number;
+  title?: string;
+  summary?: string;
+  record?: string;
+  steer?: string;
+  situationAfter?: string;
+  starred?: boolean;
+}
+
 export interface DemoRunPlan {
   title: string;
   setting: string;
   register: string;
   waypoints: string[];
   scenes: DemoScenePlan[];
+  /** Made in this order after every scene is saved, so each is dated after the newest scene. */
+  sceneEdits: DemoSceneEdit[];
 }
 
 const FACT_PROPERTIES = ['where', 'state', 'standing', 'mood', 'knows', 'owes', 'held by'] as const;
@@ -252,6 +269,32 @@ const WAYPOINTS = [
   'The toll dispute reaches the reeve\'s court.', 'Somebody finds the drowned bell.', 'The spring fair is held at the crossroads.',
   'The ford is paved with quarry stone.', 'A letter from the upper valley arrives.', 'The two banks share one market.',
 ];
+
+/**
+ * The edits the author makes once the run is written: one to each of a spread of scenes, each a
+ * different kind (a title, a summary, a line added to the record, a star, a steer, a title and the
+ * record together), the first of them edited a second time, and what stood after the newest scene
+ * reworded, which is what a resume reads as where things stand.
+ */
+function sceneEditsOfDemoRun(scenes: DemoScenePlan[], count: number): DemoSceneEdit[] {
+  const edits: DemoSceneEdit[] = [];
+  const chosen = [...scenesAtFractions(count, scenes.length, 0.4)].sort((left, right) => left - right);
+  chosen.forEach((index, step) => {
+    const scene = scenes[index]!;
+    const kind = step % 6;
+    if (kind === 0) edits.push({ number: scene.number, title: `${scene.title}, as the author tells it` });
+    if (kind === 1) edits.push({ number: scene.number, summary: `${scene.summary} The author adds that nobody spoke of it afterwards.` });
+    if (kind === 2) edits.push({ number: scene.number, record: `${scene.record}\n\nLater the author added one line: the river was louder than anyone remembered.` });
+    if (kind === 3) edits.push({ number: scene.number, starred: !scene.starred });
+    if (kind === 4) edits.push({ number: scene.number, steer: 'Slow this one down; the author wants the weather felt.' });
+    if (kind === 5) edits.push({ number: scene.number, title: `${scene.title}, again`, record: `${scene.record}\n\nThe author closed the scene on the sound of the weir.` });
+  });
+  const first = chosen[0];
+  if (first !== undefined) edits.push({ number: scenes[first]!.number, title: `${scenes[first]!.title}, told a third way` });
+  const newest = scenes[scenes.length - 1]!;
+  edits.push({ number: newest.number, situationAfter: `${newest.situationAfter} The author notes the ford is rising again.` });
+  return edits;
+}
 
 function scaled(total: number, scenes: number): number {
   return Math.max(1, Math.round((total * scenes) / DEFAULT_DEMO_SCENES));
@@ -424,6 +467,7 @@ export function planOfDemoRun(sceneCount: number = DEFAULT_DEMO_SCENES): DemoRun
 
   return {
     title: 'The Long Valley',
+    sceneEdits: sceneEditsOfDemoRun(scenes, scaled(SIZES_AT_420_SCENES.editedScenes, sceneCount)),
     setting: 'A river valley after a flood: one ford, one mill, a ferry, and two banks that do not trust each other.',
     register: 'Plain past tense, close third person, no dialect spelling.',
     waypoints: WAYPOINTS,

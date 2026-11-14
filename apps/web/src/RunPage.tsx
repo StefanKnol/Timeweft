@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, type MutableRefObject } from 'react';
-import type { RunSnapshot } from '@timeweft/contract';
+import type { RunOutline } from '@timeweft/contract';
 import { LoadedMessage, useOperation } from './calling.tsx';
 import { hashOfRoute, RUN_SECTIONS, SECTION_TITLES, titleOfRoute, type Route } from './shaping.ts';
 import { ScenesSection } from './ScenesSection.tsx';
@@ -10,6 +10,7 @@ import { CollisionsSection } from './CollisionsSection.tsx';
 import { BriefingSection } from './BriefingSection.tsx';
 import { JourneysSection } from './JourneysSection.tsx';
 import { RunSection } from './RunSection.tsx';
+import { NoticeProvider } from './NoticeArea.tsx';
 
 type RunRoute = Extract<Route, { page: 'run' }>;
 
@@ -28,25 +29,27 @@ export function RunPage({ route }: { route: RunRoute }) {
   }, [route, snapshot]);
 
   return (
-    <article aria-labelledby="run-heading" className="run-page">
-      {snapshot === null ? (
-        <>
-          <h1 id="run-heading" className="run-title">{route.slug}</h1>
-          <LoadedMessage loaded={loaded} />
-        </>
-      ) : (
-        <>
-          <RunHeading snapshot={snapshot} />
-          <SectionTabs route={route} snapshot={snapshot} scrollToHeadingWhenDrawn={scrollToHeadingWhenDrawn} />
-          <SectionBody route={route} snapshot={snapshot} readAgain={readAgain} scrollToHeadingWhenDrawn={scrollToHeadingWhenDrawn} />
-        </>
-      )}
-    </article>
+    <NoticeProvider snapshot={snapshot}>
+      <article aria-labelledby="run-heading" className="run-page">
+        {snapshot === null ? (
+          <>
+            <h1 id="run-heading" className="run-title">{route.slug}</h1>
+            <LoadedMessage loaded={loaded} />
+          </>
+        ) : (
+          <>
+            <RunHeading snapshot={snapshot} />
+            <SectionTabs route={route} snapshot={snapshot} scrollToHeadingWhenDrawn={scrollToHeadingWhenDrawn} />
+            <SectionBody route={route} snapshot={snapshot} readAgain={readAgain} scrollToHeadingWhenDrawn={scrollToHeadingWhenDrawn} />
+          </>
+        )}
+      </article>
+    </NoticeProvider>
   );
 }
 
 /** One line: the run's title and a quiet mark for binding or a telling. The rest is under "About this run". */
-function RunHeading({ snapshot }: { snapshot: RunSnapshot }) {
+function RunHeading({ snapshot }: { snapshot: RunOutline }) {
   const { run } = snapshot;
   const isBinding = run.status === 'binding';
   return (
@@ -64,7 +67,7 @@ function RunHeading({ snapshot }: { snapshot: RunSnapshot }) {
 
 function SectionTabs({ route, snapshot, scrollToHeadingWhenDrawn }: {
   route: RunRoute;
-  snapshot: RunSnapshot;
+  snapshot: RunOutline;
   scrollToHeadingWhenDrawn: MutableRefObject<boolean>;
 }) {
   const waiting = snapshot.collisions.filter((collision) => collision.state === 'waiting').length;
@@ -132,7 +135,7 @@ function scrollHeadingIntoView() {
 
 function SectionBody({ route, snapshot, readAgain, scrollToHeadingWhenDrawn }: {
   route: RunRoute;
-  snapshot: RunSnapshot;
+  snapshot: RunOutline;
   readAgain: () => void;
   scrollToHeadingWhenDrawn: MutableRefObject<boolean>;
 }) {
@@ -145,17 +148,17 @@ function SectionBody({ route, snapshot, readAgain, scrollToHeadingWhenDrawn }: {
   const heading = <h2 id={SECTION_HEADING_ID} tabIndex={-1} className="section-heading">{SECTION_TITLES[route.section]}</h2>;
   switch (route.section) {
     case 'scenes':
-      return <section className={route.itemId === null ? 'section-wide' : 'section-prose'}>{heading}<ScenesSection snapshot={snapshot} selectedSceneId={route.itemId} /></section>;
+      return <section className={route.itemId === null ? 'section-wide' : 'section-prose'}>{heading}<ScenesSection snapshot={snapshot} selectedItemId={route.itemId} /></section>;
     case 'entries':
       return <section className="section-wide">{heading}<EntriesSection snapshot={snapshot} openEntryId={route.itemId} readAgain={readAgain} /></section>;
     case 'rulings':
-      return <section className="section-wide">{heading}<RulingsSection snapshot={snapshot} readAgain={readAgain} /></section>;
+      return <section className="section-wide">{heading}<RulingsSection snapshot={snapshot} shownItemId={route.itemId} readAgain={readAgain} /></section>;
     case 'threads':
-      return <section className="section-wide">{heading}<ThreadsSection snapshot={snapshot} readAgain={readAgain} /></section>;
+      return <section className="section-wide">{heading}<ThreadsSection snapshot={snapshot} shownItemId={route.itemId} readAgain={readAgain} /></section>;
     case 'journeys':
-      return <section className="section-wide">{heading}<JourneysSection snapshot={snapshot} readAgain={readAgain} /></section>;
+      return <section className="section-wide">{heading}<JourneysSection snapshot={snapshot} shownItemId={route.itemId} readAgain={readAgain} /></section>;
     case 'collisions':
-      return <section className="section-wide">{heading}<CollisionsSection snapshot={snapshot} readAgain={readAgain} /></section>;
+      return <section className="section-wide">{heading}<CollisionsSection snapshot={snapshot} shownItemId={route.itemId} readAgain={readAgain} /></section>;
     case 'briefing':
       return <section className="section-wide">{heading}<BriefingSection runSlug={snapshot.run.slug} /></section>;
     case 'run':

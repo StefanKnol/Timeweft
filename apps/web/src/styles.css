@@ -171,6 +171,9 @@ code { font-size: 0.9em; }
   margin: 0;
   overflow-x: auto;
   scrollbar-width: thin;
+  /* Positioned, so the hidden "waiting" word in the collisions tab is held inside the row's own
+     scrolling; otherwise it sits past the right edge and a phone widens the whole page to reach it. */
+  position: relative;
 }
 .section-tabs li { flex: none; }
 /* Where the screen has room past the column, the row may use a little of it, so all eight tabs
@@ -200,6 +203,11 @@ code { font-size: 0.9em; }
 }
 /* A heading reached by a tab, a skip link or focus is not left hidden under the tabs. */
 .run-page h2, .run-page h3 { scroll-margin-top: 4rem; }
+/* An item a link scrolls to stops clear of the tabs, and is marked for a moment's finding. */
+.run-page [id^="item-"], .run-page details.card { scroll-margin-top: 4.5rem; }
+.run-page [id^="item-"]:focus { outline: none; }
+.run-page [id^="item-"]:focus-visible { outline: 3px solid var(--focus); }
+.item-shown { box-shadow: 0 0 0 2px var(--accent); }
 .section-heading { margin-top: 1rem; }
 .section-heading:focus { outline: none; }
 .section-heading:focus-visible { outline: 3px solid var(--focus); }
@@ -291,6 +299,8 @@ button {
   min-height: 2.5rem;
 }
 button:disabled { opacity: 0.6; cursor: default; }
+/* A button pressed while its act runs: still focusable, so focus is not dropped. */
+button[aria-disabled="true"] { opacity: 0.6; cursor: progress; }
 .quiet-button {
   background: transparent;
   color: var(--accent);
@@ -374,3 +384,160 @@ fieldset { min-width: 0; }
 .confirming p { margin: 0.25rem 0; }
 .property-list dd .quiet-button { margin-left: 0.25rem; }
 .backup-download { margin-top: 0.75rem; }
+
+/* The one notice after an act: fixed at the foot of the screen, the latest only. */
+.run-page { padding-bottom: 5rem; }
+.notice-area {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 15;
+  display: flex;
+  justify-content: center;
+  padding: 0 0.75rem calc(0.75rem + env(safe-area-inset-bottom));
+  pointer-events: none;
+}
+/* The page column narrows what it holds; the notice spans the screen and centres itself. */
+.page > .notice-area { max-width: none; }
+.notice {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  max-width: var(--measure);
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgb(0 0 0 / 0.18);
+  padding: 0.6rem 0.6rem 0.6rem 0.9rem;
+  font-family: system-ui, sans-serif;
+  font-size: 0.95rem;
+}
+.notice:focus { outline: none; }
+.notice:focus-visible { outline: 3px solid var(--focus); }
+.notice-words { flex: 1; min-width: 0; }
+.notice-words p { margin: 0.15rem 0; }
+.notice-dismiss {
+  flex: none;
+  background: transparent;
+  border: none;
+  color: var(--ink-quiet);
+  font-size: 1.3rem;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+  min-height: 0;
+}
+/* Two lasting acts side by side: one asking does not stretch the other. */
+.button-row { align-items: flex-start; }
+
+/* A long list's controls: search, go to, the chips and the count with the order beside it. */
+.list-controls {
+  font-family: system-ui, sans-serif;
+  font-size: 0.9375rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0 0 0.75rem;
+}
+.list-controls p { margin: 0; }
+.list-controls label { font-weight: 600; }
+.scene-list-top { color: var(--ink-quiet); }
+.go-to-scene { margin: 0; }
+.go-to-scene .number-box { width: 5.5rem; }
+.scene-search label { display: block; margin-bottom: 0.15rem; }
+.scene-search-row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.scene-search-row input { flex: 1 1 14rem; min-width: 0; }
+.chip-row, .order-switch { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.chip {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.25rem 0.75rem;
+  min-height: 2.25rem;
+  font-size: 0.875rem;
+}
+/* A chip that is on: filled, and marked with a tick besides the colour. */
+.chip[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--ground);
+}
+.chip[aria-pressed='true']::before { content: '✓ '; }
+.count-and-order { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.75rem; }
+.scene-count { flex: 1 1 12rem; }
+.show-older { margin: 0.5rem 0; }
+
+/* The entry picker: a box with its list under it, and the picked entries as chips. */
+.entry-picker { position: relative; }
+.entry-picker-label { display: block; margin-bottom: 0.15rem; }
+.entry-picker-box { position: relative; max-width: 30rem; }
+.entry-picker-list {
+  position: absolute;
+  z-index: 12;
+  left: 0;
+  right: 0;
+  top: 100%;
+  margin: 0.15rem 0 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  max-height: 18rem;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.16);
+}
+.entry-picker-list[hidden] { display: none; }
+.entry-picker-option { padding: 0.35rem 0.6rem; cursor: pointer; line-height: 1.35; }
+.entry-picker-option.active { background: var(--accent); color: var(--ground); }
+.entry-picker-option.active .quiet { color: inherit; }
+.entry-picker-name { font-weight: 600; }
+.entry-picker-told-apart { font-size: 0.8125rem; }
+.entry-picker-more { padding: 0.35rem 0.6rem; font-size: 0.8125rem; }
+.picked-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; list-style: none; margin: 0 0 0.3rem; padding: 0; }
+.picked-chip {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  min-height: 2rem;
+  font-size: 0.875rem;
+}
+
+/* Compact scene rows: number, title, marks and when on one line; the summary quiet, two lines at most. */
+.scene-rows { border-top: 1px solid var(--line); }
+.scene-row-item { border-bottom: 1px solid var(--line); scroll-margin-top: 4.5rem; }
+.scene-row {
+  display: block;
+  padding: 0.5rem 0.25rem;
+  margin: 0;
+  color: inherit;
+  text-decoration: none;
+}
+a.scene-row:hover .scene-row-title, a.scene-row:focus-visible .scene-row-title { text-decoration: underline; }
+.scene-row-line { display: block; }
+.scene-number { font-variant-numeric: tabular-nums; color: var(--ink-quiet); }
+.scene-row-title { color: var(--accent); font-weight: 600; }
+.scene-row-mark, .scene-row-when { font-family: system-ui, sans-serif; font-size: 0.875rem; }
+.scene-row-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+.scene-row-excerpt { display: block; font-size: 0.9375rem; line-height: 1.4; margin-top: 0.2rem; }
+.scene-row-excerpt mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--ink); }
+.scene-row-item .struck-takes { margin: 0 0 0.4rem 1.6rem; font-size: 0.9375rem; }
+.scene-row-item .struck { margin-top: 0; }
+/* The row the author came back to from reading it. */
+.row-returned-to { background: var(--surface); box-shadow: inset 4px 0 0 var(--accent); }
+.no-match { margin: 1rem 0; }
+.scene-list-top-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 1.25rem; }

@@ -9,16 +9,16 @@
  * Waypoints are served to a story. They are never shown in the narration, but they are what the
  * writer steers by, and a story chat is the writer. A withdrawn one is not.
  *
- * What the author changed in place (the run, an entry, a waypoint's words) keeps its earlier values
+ * What the author changed in place (the run, an entry, a waypoint's words, a saved scene) keeps its earlier values
  * as history rows. Those are the author's: a story reads each thing as it is now.
  */
 import type { Kysely } from 'kysely';
-import type { ClockReading, RunSnapshot, ThreadRecord } from '@timeweft/contract';
+import type { ClockReading, RunOutline, RunSnapshot, ThreadRecord } from '@timeweft/contract';
 import type { Database } from './database.ts';
 import { normaliseName } from './names.ts';
 import {
   clockFromRow, collisionFromRow, entryEditFromRow, entryFromRow, factFromRow, legFromRow, noteFromRow,
-  rulingFromRow, runEditFromRow, runFromRow, sceneFromRow, threadFromRow, waypointFromRow,
+  rulingFromRow, runEditFromRow, runFromRow, sceneEditFromRow, sceneFromRow, threadFromRow, waypointFromRow,
   waypointRewordingFromRow, type RunRow,
 } from './rows.ts';
 
@@ -46,6 +46,7 @@ export async function readWholeRun(database: Kysely<Database>, run: RunRow): Pro
   const runEdits = await database.selectFrom('run_edits').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
   const entryEdits = await database.selectFrom('entry_edits').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
   const waypointRewordings = await database.selectFrom('waypoint_rewordings').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
+  const sceneEdits = await database.selectFrom('scene_edits').selectAll().where('run_id', '=', runId).orderBy('written_order').execute();
 
   const readingsByScene = groupBy(readings, (reading) => reading.scene_id, (reading): ClockReading => ({
     clockId: reading.clock_id, count: reading.count, partOfDay: reading.part_of_day,
@@ -67,6 +68,7 @@ export async function readWholeRun(database: Kysely<Database>, run: RunRow): Pro
     runEdits: runEdits.map(runEditFromRow),
     entryEdits: entryEdits.map(entryEditFromRow),
     waypointRewordings: waypointRewordings.map(waypointRewordingFromRow),
+    sceneEdits: sceneEdits.map(sceneEditFromRow),
   };
 }
 
@@ -114,7 +116,8 @@ function groupBy<Row, Value>(rows: Row[], keyOf: (row: Row) => string, valueOf: 
  * gone; author-only entries, facts and notes are gone; anything belonging to or pointing at an
  * entry that is not served is gone or has the pointer taken out; a journey leg naming an author-only
  * entry is gone; collisions, the author's history
- * rows and withdrawn waypoints are the author's.
+ * rows (a saved scene's earlier wordings among them) and withdrawn waypoints are the author's.
+ * A scene a story is served holds its newest wording, since the scene's row holds it.
  */
 export function filterForStory(whole: RunSnapshot): RunSnapshot {
   const standingSceneIds = new Set(whole.scenes.filter((scene) => scene.status === 'standing').map((scene) => scene.id));
@@ -161,5 +164,23 @@ export function filterForStory(whole: RunSnapshot): RunSnapshot {
     runEdits: [],
     entryEdits: [],
     waypointRewordings: [],
+    sceneEdits: [],
+  };
+}
+
+/** How many words a piece of prose holds: runs of anything but white space. */
+export function wordsIn(text: string): number {
+  const trimmed = text.trim();
+  return trimmed === '' ? 0 : trimmed.split(/\s+/u).length;
+}
+
+/**
+ * The author's whole run with each scene's record left out and its length in words given instead.
+ * Every other part of the snapshot is passed on as it is.
+ */
+export function outlineOfSnapshot(snapshot: RunSnapshot): RunOutline {
+  return {
+    ...snapshot,
+    scenes: snapshot.scenes.map(({ record, ...rest }) => ({ ...rest, recordWords: wordsIn(record) })),
   };
 }

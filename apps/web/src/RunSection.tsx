@@ -1,4 +1,4 @@
-import type { RunSnapshot } from '@timeweft/contract';
+import type { RunOutline } from '@timeweft/contract';
 import { KeptText } from './marks.tsx';
 import { RunDetailsEditor } from './RunDetailsEditor.tsx';
 import { BackupDownload } from './BackupDownload.tsx';
@@ -8,7 +8,7 @@ import { BackupDownload } from './BackupDownload.tsx';
  * them with their history, and the backup download. These used to sit above every section, which
  * pushed each section's own content below the first screen of a phone.
  */
-export function RunSection({ snapshot, readAgain }: { snapshot: RunSnapshot; readAgain: () => void }) {
+export function RunSection({ snapshot, readAgain }: { snapshot: RunOutline; readAgain: () => void }) {
   const { run } = snapshot;
   return (
     <>

@@ -49,6 +49,9 @@ export interface SeedCounts {
   collisions: number;
   legs: number;
   proseWords: number;
+  /** Scenes the author edited by hand once the run was written, and the history rows those edits wrote. */
+  editedScenes: number;
+  sceneEdits: number;
 }
 
 function sceneRequest(slug: string, plan: DemoScenePlan, threadIds: Map<number, string>, waypointIds: string[]) {
@@ -96,7 +99,7 @@ export async function seedDemoRun(store: Store, request: SeedRequest): Promise<S
   const threadIds = new Map<number, string>();
   const counts: SeedCounts = {
     scenes: 0, struckTakes: 0, starred: 0, entries: 0, authorOnlyEntries: 0, facts: 0, notes: 0, rulings: 0,
-    threadsOpened: 0, threadsClosed: 0, collisions: 0, legs: 0, proseWords: 0,
+    threadsOpened: 0, threadsClosed: 0, collisions: 0, legs: 0, proseWords: 0, editedScenes: 0, sceneEdits: 0,
   };
 
   for (const scene of plan.scenes) {
@@ -140,6 +143,18 @@ export async function seedDemoRun(store: Store, request: SeedRequest): Promise<S
       counts.facts += 1;
     }
   }
+
+  // The author's edits come last, once every scene is saved, as edits made to a finished run would.
+  const standingIdByNumber = new Map((await store.snapshotOf(request.slug, 'author')).scenes
+    .filter((scene) => scene.status === 'standing').map((scene) => [scene.number, scene.id]));
+  const editedNumbers = new Set<number>();
+  for (const { number, ...fields } of plan.sceneEdits) {
+    const edited = await store.editScene(OPERATIONS.edit_scene.input.parse({ run: request.slug, sceneId: standingIdByNumber.get(number)!, ...fields }));
+    editedNumbers.add(number);
+    counts.sceneEdits += edited.edits.length;
+    if (fields.starred !== undefined) counts.starred += fields.starred ? 1 : -1;
+  }
+  counts.editedScenes = editedNumbers.size;
   return counts;
 }
 

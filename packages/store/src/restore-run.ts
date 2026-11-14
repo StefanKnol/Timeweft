@@ -14,7 +14,7 @@
  */
 import { sql, type Kysely, type RawBuilder } from 'kysely';
 import {
-  RUN_EXPORT_TABLE_NAMES, Refusal, isRunSlug, whyTheFormatVersionIsNotRead,
+  RUN_EXPORT_TABLE_NAMES, Refusal, isRunSlug, TABLES_ADDED_AFTER_VERSION_1, whyTheFormatVersionIsNotRead,
   type RestoredRunReport, type RunExportDocument, type RunExportRowCounts, type RunExportTableName, type RunRecord,
 } from '@timeweft/contract';
 import type { Database } from './database.ts';
@@ -303,6 +303,13 @@ export async function restoreRunInto(
 ): Promise<RestoredRunReport> {
   const versionNotRead = whyTheFormatVersionIsNotRead(document.formatVersion);
   if (versionNotRead !== null) throw new Refusal(versionNotRead);
+  // A version 1 document holds no list for the tables added since: it is read as holding none of their
+  // rows. `readRunExportDocument` has usually brought the empty lists already, and refused a version 1
+  // document carrying one of them; one handed straight to the store is given them here.
+  if (document.formatVersion === 1) {
+    const missing = TABLES_ADDED_AFTER_VERSION_1.filter((table) => !(table in document.tables));
+    if (missing.length > 0) document = { ...document, tables: { ...document.tables, ...Object.fromEntries(missing.map((table) => [table, []])) } };
+  }
   checkTheRows(document);
   const runId = document.tables.runs[0]!.id;
   try {

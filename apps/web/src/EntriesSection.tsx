@@ -1,10 +1,10 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { ENTRY_KINDS, VISIBILITIES } from '@timeweft/contract';
-import type { EntryKind, EntryRecord, RunSnapshot, Visibility } from '@timeweft/contract';
-import { ActMessage, ConfirmingButton, useAct, type Act } from './authoring.tsx';
+import type { EntryKind, EntryRecord, RunOutline, Visibility } from '@timeweft/contract';
+import { ActMessage, ConfirmingButton, EditFold, useAct, type Act } from './authoring.tsx';
 import { AuthorOnlyMark } from './marks.tsx';
 import {
-  EMPTY_FACT_FORM, asOfNowInWords, changedWhenInWords, entriesByName, entriesGroupedByKind, entryDetailsFormOf, entryEditToSend,
+  EMPTY_FACT_FORM, asOfNowInWords, changedWhenAndAtInWords, hashOfRoute, quotedSentence, entriesByName, entriesGroupedByKind, entryDetailsFormOf, entryEditToSend,
   entryHistoryInWords, factToSend, factsOfEntryByProperty, heldSpanInWords, lastingActInWords, newEntryToSend, propertiesOfEntry,
   renameToSend, trailOfEntry, whyAnActNeedsAScene, type EntryDetailsForm, type FactAsDrawn, type FactForm, type NewEntryForm,
   quotedNamesInWords, rowsForLinesOf,
@@ -31,14 +31,14 @@ const VISIBILITY_WORDS: Record<Visibility, string> = {
   'author-only': 'Author only: only these pages show it',
 };
 
-export function EntriesSection({ snapshot, openEntryId, readAgain }: { snapshot: RunSnapshot; openEntryId: string | null; readAgain: () => void }) {
+export function EntriesSection({ snapshot, openEntryId, readAgain }: { snapshot: RunOutline; openEntryId: string | null; readAgain: () => void }) {
   const groups = entriesGroupedByKind(snapshot.entries);
-  // Changing an entry's kind moves it to another group, so that it moved is said here.
-  const [lastMoved, setLastMoved] = useState<string | null>(null);
+  // Changing an entry's kind moves it to another group, where it is drawn afresh; it is left open
+  // there, scrolled to and given focus once the run is read again with its new kind.
+  const [moved, setMoved] = useState<{ entryId: string; kind: EntryKind } | null>(null);
   return (
     <>
       <AddEntryForm runSlug={snapshot.run.slug} readAgain={readAgain} />
-      {lastMoved !== null && <p className="quiet" role="status">{lastMoved}</p>}
       {groups.length === 0 && <p>No people, places or things have been named yet.</p>}
       {groups.map((group) => (
         <section key={group.kind} aria-labelledby={`kind-${group.kind}`}>
@@ -48,7 +48,9 @@ export function EntriesSection({ snapshot, openEntryId, readAgain }: { snapshot:
               <li key={entry.id}>
                 <EntryDetails
                   entry={entry} snapshot={snapshot} startsOpen={entry.id === openEntryId} readAgain={readAgain}
-                  onMoved={(kind) => setLastMoved(`Saved. ${entry.name} is now under ${KIND_HEADINGS[kind]}.`)}
+                  arrivedAfterMoving={moved !== null && moved.entryId === entry.id && moved.kind === entry.kind}
+                  onMoved={(kind) => setMoved({ entryId: entry.id, kind })}
+                  onArrived={() => setMoved(null)}
                 />
               </li>
             ))}
@@ -59,13 +61,32 @@ export function EntriesSection({ snapshot, openEntryId, readAgain }: { snapshot:
   );
 }
 
-function EntryDetails({ entry, snapshot, startsOpen, readAgain, onMoved }: {
+function EntryDetails({ entry, snapshot, startsOpen, readAgain, arrivedAfterMoving, onMoved, onArrived }: {
   entry: EntryRecord;
-  snapshot: RunSnapshot;
+  snapshot: RunOutline;
   startsOpen: boolean;
   readAgain: () => void;
+  arrivedAfterMoving: boolean;
   onMoved: (kind: EntryKind) => void;
+  onArrived: () => void;
 }) {
+  const cardReference = useRef<HTMLDetailsElement>(null);
+  // Opened by the address (a "Show it" link, or a reload) or by having just moved: opened,
+  // scrolled to and given focus on its name, once each time it comes to be shown.
+  const shown = startsOpen || arrivedAfterMoving;
+  const wasShown = useRef(false);
+  const onArrivedReference = useRef(onArrived);
+  onArrivedReference.current = onArrived;
+  useEffect(() => {
+    const comesToBeShown = shown && !wasShown.current;
+    wasShown.current = shown;
+    const card = cardReference.current;
+    if (!comesToBeShown || card === null) return;
+    card.open = true;
+    card.scrollIntoView({ block: 'start' });
+    card.querySelector('summary')?.focus({ preventScroll: true });
+    if (arrivedAfterMoving) onArrivedReference.current();
+  }, [shown, arrivedAfterMoving]);
   const [showingHistory, setShowingHistory] = useState(false);
   const properties = factsOfEntryByProperty(entry.id, snapshot);
   const trail = trailOfEntry(entry.id, snapshot);
@@ -79,7 +100,7 @@ function EntryDetails({ entry, snapshot, startsOpen, readAgain, onMoved }: {
   const editing = useAct(readAgain);
 
   return (
-    <details className="card" open={startsOpen}>
+    <details ref={cardReference} className="card" id={`entry-${entry.id}`}>
       <summary>
         <span className="entry-name">{entry.name}</span> <AuthorOnlyMark visibility={entry.visibility} />
         {entry.alsoKnownAs.length > 0 && <span className="quiet"> also {quotedNamesInWords(entry.alsoKnownAs)}</span>}
@@ -101,7 +122,7 @@ function EntryDetails({ entry, snapshot, startsOpen, readAgain, onMoved }: {
       {showingHistory && changes.length > 0 && (
         <ol className="history-list" aria-label={`Changes to ${entry.name}, oldest first`}>
           {changes.map((change, index) => (
-            <li key={index}>{change.label}, {changedWhenInWords(change.changedAfterSceneNumber)}: was {change.earlier}, became {change.later}</li>
+            <li key={index}>{change.label}, {changedWhenAndAtInWords(change.changedAfterSceneNumber, change.writtenAt)}: was {change.earlier}, became {change.later}</li>
           ))}
         </ol>
       )}
@@ -120,7 +141,11 @@ function EntryDetails({ entry, snapshot, startsOpen, readAgain, onMoved }: {
                     label="End this fact" confirmLabel="End the fact"
                     explanation={lastingActInWords('end-fact', snapshot)}
                     whyNot={whyAnActNeedsAScene(snapshot)} busy={ending.busy}
-                    onConfirm={() => void ending.act('end_fact', { fact: item.fact.id })}
+                    onConfirm={() => void ending.act('end_fact', { fact: item.fact.id }, {
+                      words: `${quotedSentence(`Ended ${entry.name}'s ${property.property}, `, item.fact.value)} It is kept in the history.`,
+                      // The button goes with the fact, so focus goes to the notice.
+                      focusTheNotice: true,
+                    })}
                   />
                 </dd>
               ))}
@@ -137,7 +162,7 @@ function EntryDetails({ entry, snapshot, startsOpen, readAgain, onMoved }: {
           ))}
         </dl>
       )}
-      <ActMessage actState={ending.actState} doneWords="Ended. It is kept in the history." />
+      <ActMessage actState={ending.actState} />
       <StateFactForm entry={entry} snapshot={snapshot} readAgain={readAgain} />
       <h4>Trail</h4>
       {trail.length === 0 ? (
@@ -152,21 +177,22 @@ function EntryDetails({ entry, snapshot, startsOpen, readAgain, onMoved }: {
         </ol>
       )}
       <h4>Change this entry</h4>
-      <details className="author-form">
-        <summary>Rename it</summary>
-        {/* Keyed by the name, so after a rename the box starts from the new one. */}
-        <RenameForm key={entry.name} entry={entry} editing={editing} />
-      </details>
-      <details className="author-form">
-        <summary>Change its kind, other names or pronoun</summary>
-        <EntryDetailsFormFields key={JSON.stringify(entryDetailsFormOf(entry))} entry={entry} editing={editing} onMoved={onMoved} />
-      </details>
+      <EditFold summary="Rename it" onClosed={editing.edited}>
+        {(close) => <RenameForm entry={entry} editing={editing} onSaved={close} />}
+      </EditFold>
+      <EditFold summary="Change its kind, other names or pronoun" onClosed={editing.edited}>
+        {(close) => <EntryDetailsFormFields entry={entry} snapshot={snapshot} editing={editing} onSaved={close} onMoved={onMoved} />}
+      </EditFold>
       <ConfirmingButton
         label={entry.visibility === 'open' ? 'Turn it author only' : 'Turn it open'}
         confirmLabel={entry.visibility === 'open' ? 'Turn it author only' : 'Turn it open'}
         explanation={lastingActInWords(entry.visibility === 'open' ? 'turn-author-only' : 'turn-open', snapshot)}
         whyNot={null} busy={editing.busy}
-        onConfirm={() => void editing.act('set_entry_visibility', { entry: entry.id, visibility: entry.visibility === 'open' ? 'author-only' : 'open' })}
+        onConfirm={() => void editing.act(
+          'set_entry_visibility',
+          { entry: entry.id, visibility: entry.visibility === 'open' ? 'author-only' : 'open' },
+          { words: entry.visibility === 'open' ? `Turned ${entry.name} author only.` : `Turned ${entry.name} open: a story is told of it again.` },
+        )}
       />
       <ActMessage actState={editing.actState} />
     </details>
@@ -223,16 +249,20 @@ const EMPTY_NEW_ENTRY: NewEntryForm = { name: '', kind: 'person', alsoKnownAsTex
 function AddEntryForm({ runSlug, readAgain }: { runSlug: string; readAgain: () => void }) {
   const idPrefix = useId();
   const [form, setForm] = useState<NewEntryForm>(EMPTY_NEW_ENTRY);
-  const { actState, busy, act, refuse } = useAct(readAgain);
+  const { actState, busy, act, refuse, edited } = useAct(readAgain);
   const add = async () => {
     const toSend = newEntryToSend(runSlug, form);
     if (!toSend.ok) return refuse(toSend.reason);
-    if (await act('add_entry', toSend.input)) setForm(EMPTY_NEW_ENTRY);
+    const taken = await act('add_entry', toSend.input, (answer) => ({
+      words: `Added ${answer.entry.name} under ${KIND_HEADINGS[answer.entry.kind]}.`,
+      link: { href: hashOfRoute({ page: 'run', slug: runSlug, section: 'entries', itemId: answer.entry.id }), words: 'Show it' },
+    }));
+    if (taken) setForm(EMPTY_NEW_ENTRY);
   };
   return (
     <details className="author-form">
       <summary>Add a person, group, place or thing</summary>
-      <form className="stacked-form" onSubmit={(event) => { event.preventDefault(); void add(); }}>
+      <form className="stacked-form" onInput={edited} onSubmit={(event) => { event.preventDefault(); void add(); }}>
         <label htmlFor={`${idPrefix}-name`}>Name</label>
         <input id={`${idPrefix}-name`} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
         <KindChoice id={`${idPrefix}-kind`} value={form.kind} onChange={(kind) => setForm({ ...form, kind })} />
@@ -241,70 +271,88 @@ function AddEntryForm({ runSlug, readAgain }: { runSlug: string; readAgain: () =
         <label htmlFor={`${idPrefix}-pronoun`}>For a person: how the narration refers to them</label>
         <input id={`${idPrefix}-pronoun`} value={form.pronoun} onChange={(event) => setForm({ ...form, pronoun: event.target.value })} />
         <VisibilityChoice name={`${idPrefix}-visibility`} value={form.visibility} onChange={(visibility) => setForm({ ...form, visibility })} />
-        <button type="submit" disabled={busy}>Add it</button>
-        <ActMessage actState={actState} doneWords="Added." />
+        <button type="submit" aria-disabled={busy || undefined}>Add it</button>
+        <ActMessage actState={actState} />
       </form>
     </details>
   );
 }
 
-function RenameForm({ entry, editing }: { entry: EntryRecord; editing: Act }) {
+function RenameForm({ entry, editing, onSaved }: { entry: EntryRecord; editing: Act; onSaved: () => void }) {
   const nameId = useId();
   const [name, setName] = useState(entry.name);
-  const { busy, act, refuse } = editing;
+  const { busy, act, refuse, edited } = editing;
   const rename = async () => {
     const toSend = renameToSend(entry, name);
     if (!toSend.ok) return refuse(toSend.reason);
-    await act('rename_entry', toSend.input);
+    const taken = await act('rename_entry', toSend.input, (answer) => ({
+      words: quotedSentence(`Renamed \u201c${entry.name}\u201d to `, answer.entry.name),
+    }));
+    if (taken) onSaved();
   };
   return (
-    <form className="stacked-form" onSubmit={(event) => { event.preventDefault(); void rename(); }}>
+    <form className="stacked-form" onInput={edited} onSubmit={(event) => { event.preventDefault(); void rename(); }}>
       <label htmlFor={nameId}>The name it is known by from now on</label>
       <input id={nameId} value={name} onChange={(event) => setName(event.target.value)} />
       <p className="quiet field-hint">The old name joins its other names, so it is still found by it.</p>
-      <button type="submit" disabled={busy}>Rename it</button>
+      <button type="submit" aria-disabled={busy || undefined}>Rename it</button>
     </form>
   );
 }
 
-function EntryDetailsFormFields({ entry, editing, onMoved }: { entry: EntryRecord; editing: Act; onMoved: (kind: EntryKind) => void }) {
+function EntryDetailsFormFields({ entry, snapshot, editing, onSaved, onMoved }: {
+  entry: EntryRecord;
+  snapshot: RunOutline;
+  editing: Act;
+  onSaved: () => void;
+  onMoved: (kind: EntryKind) => void;
+}) {
   const idPrefix = useId();
   const [form, setForm] = useState<EntryDetailsForm>(entryDetailsFormOf(entry));
-  const { busy, act, refuse } = editing;
+  const { busy, act, refuse, edited } = editing;
   const save = async () => {
     const toSend = entryEditToSend(entry, form);
     if (!toSend.ok) return refuse(toSend.reason);
-    const taken = await act('edit_entry', toSend.input);
-    if (taken && toSend.input.kind !== undefined) onMoved(toSend.input.kind);
+    const newKind = toSend.input.kind;
+    const taken = await act('edit_entry', toSend.input, newKind === undefined
+      ? { words: `Saved the changes to ${entry.name}.` }
+      : {
+        words: `${entry.name} is now under ${KIND_HEADINGS[newKind]}.`,
+        link: { href: hashOfRoute({ page: 'run', slug: snapshot.run.slug, section: 'entries', itemId: entry.id }), words: 'Show it' },
+      });
+    if (!taken) return;
+    if (newKind === undefined) onSaved();
+    else onMoved(newKind);
   };
   return (
-    <form className="stacked-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+    <form className="stacked-form" onInput={edited} onSubmit={(event) => { event.preventDefault(); void save(); }}>
       <KindChoice id={`${idPrefix}-kind`} value={form.kind} onChange={(kind) => setForm({ ...form, kind })} />
       <label htmlFor={`${idPrefix}-also`}>Other names it goes by, one per line</label>
       <textarea id={`${idPrefix}-also`} rows={rowsForLinesOf(form.alsoKnownAsText)} value={form.alsoKnownAsText} onChange={(event) => setForm({ ...form, alsoKnownAsText: event.target.value })} />
       <label htmlFor={`${idPrefix}-pronoun`}>For a person: how the narration refers to them</label>
       <input id={`${idPrefix}-pronoun`} value={form.pronoun} onChange={(event) => setForm({ ...form, pronoun: event.target.value })} />
       <p className="quiet field-hint">What it said before is kept, with when it changed.</p>
-      <button type="submit" disabled={busy}>Save the changes</button>
+      <button type="submit" aria-disabled={busy || undefined}>Save the changes</button>
     </form>
   );
 }
 
-function StateFactForm({ entry, snapshot, readAgain }: { entry: EntryRecord; snapshot: RunSnapshot; readAgain: () => void }) {
+function StateFactForm({ entry, snapshot, readAgain }: { entry: EntryRecord; snapshot: RunOutline; readAgain: () => void }) {
   const idPrefix = useId();
   const [form, setForm] = useState<FactForm>(EMPTY_FACT_FORM);
-  const { actState, busy, act, refuse } = useAct(readAgain);
+  const { actState, busy, act, refuse, edited } = useAct(readAgain);
   const others = entriesByName(snapshot.entries.filter((other) => other.id !== entry.id));
   const knownProperties = propertiesOfEntry(entry.id, snapshot);
   const state = async () => {
     const toSend = factToSend(snapshot.run.slug, entry.id, form);
     if (!toSend.ok) return refuse(toSend.reason);
-    if (await act('state_fact', toSend.input)) setForm(EMPTY_FACT_FORM);
+    const said = { words: quotedSentence(`Stated ${entry.name}'s ${toSend.input.property}: `, toSend.input.value) };
+    if (await act('state_fact', toSend.input, said)) setForm(EMPTY_FACT_FORM);
   };
   return (
     <details className="author-form">
       <summary>State a fact</summary>
-      <form className="stacked-form" onSubmit={(event) => { event.preventDefault(); void state(); }}>
+      <form className="stacked-form" onInput={edited} onSubmit={(event) => { event.preventDefault(); void state(); }}>
         <label htmlFor={`${idPrefix}-property`}>What is being said: where, who, state, held by, or any other</label>
         <input
           id={`${idPrefix}-property`} list={`${idPrefix}-properties`} value={form.property}
@@ -328,8 +376,8 @@ function StateFactForm({ entry, snapshot, readAgain }: { entry: EntryRecord; sna
         <p className="quiet field-hint">
           It holds {asOfNowInWords(snapshot)} and replaces what the property held in the same lane. What held before is kept as history.
         </p>
-        <button type="submit" disabled={busy}>State the fact</button>
-        <ActMessage actState={actState} doneWords="Stated." />
+        <button type="submit" aria-disabled={busy || undefined}>State the fact</button>
+        <ActMessage actState={actState} />
       </form>
     </details>
   );

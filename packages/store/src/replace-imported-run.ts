@@ -60,6 +60,7 @@ const KIND_IN_WORDS: Record<keyof RunCounts | 'collisions', [string, string]> = 
 const AUTHORS_HISTORY_IN_WORDS: Record<(typeof TABLES_THE_AUTHORS_HAND_WRITES)[number], [string, string]> = {
   run_edits: ["change to the run's title, setting, register or status", "changes to the run's title, setting, register or status"],
   entry_edits: ['change to an entry', 'changes to entries'],
+  scene_edits: ['change to a saved scene', 'changes to saved scenes'],
   waypoint_rewordings: ['rewording of a waypoint', 'rewordings of waypoints'],
 };
 

@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type {
-  CollisionRecord, EntryNoteRecord, EntryRecord, FactRecord, RulingRecord, RunSnapshot, SceneRecord,
+  CollisionRecord, EntryNoteRecord, EntryRecord, FactRecord, RulingRecord, RunOutline, SceneOutline,
   ThreadRecord,
 } from '@timeweft/contract';
 import {
   budgetFromText, collisionsWithBothSides, entriesGroupedByKind, factsOfEntryByProperty, hashOfRoute,
   heldSpanInWords, isAuthorOnly, outcomeOfResponse, readingsWithClockNames, routeFromHash,
-  routeOfOperation, rulingsMatching, scenesByNumber, sizeInWords, threadLastTouchInWords, threadsOpenFirst, trailOfEntry, quotedNamesInWords, quotedValueInWords, rowsForLinesOf, waypointMoveInWords,
+  routeOfOperation, rulingsMatching, scenesByNumber, sizeInWords, threadLastTouchInWords, threadsOpenFirst, trailOfEntry, quotedNamesInWords, quotedValueInWords, rowsForLinesOf, waypointMoveInWords, writtenAtInWords,
   upcomingNamesFromText, waypointsAheadFirst, journeysInSceneOrder, whatASceneEstablished,
   asOfNowInWords, cautionsOfAnswer, entriesARulingMayName, entriesAThreadMayBeAbout, entryDetailsFormOf, entryEditToSend, entryHistoryInWords,
   factToSend, lastingActInWords, newEntryToSend, newestStandingScene, renameToSend, runDetailsFormOf, runEditToSend,
@@ -16,15 +16,17 @@ import {
   LARGEST_BACKUP_FILE_BYTES_READ, LARGEST_RESTORE_BODY_BYTES, REPLACE_ON_RESTORE_SENTENCE, bodyBytesOf, backupDownloadOf, restoreButtonText, restoreToSend,
   restoredInWords, runRowCountsInWords, whyBackupFileCannotStart,
   megabytesInWords, RUN_SECTIONS, titleOfRoute,
+  actStateAfter, cautionInWords, changedWhenAndAtInWords, markReachedQuestion, noticeAfter, noticeStaysUntilDismissed, quotedSentence,
+  settleCollisionQuestion, type ActState, type Notice, type NoticeState,
 } from './shaping.ts';
 import { RUN_EXPORT_TABLE_NAMES, runExportDocumentAsText, type RestoredRunReport, type RunExportDocument, type RunExportRowCounts, type RunRecord } from '@timeweft/contract';
 
 // A made-up demo world: a miller, a ferry, a ford and a lantern.
 
-function scene(id: string, number: number, status: 'standing' | 'struck', createdAt: string): SceneRecord {
+function scene(id: string, number: number, status: 'standing' | 'struck', createdAt: string): SceneOutline {
   return {
     id, runId: 'run', number, title: `Scene ${id}`, starred: false, whenTyped: 'morning', placeEntryId: null,
-    summary: '', record: '', steer: '', situationAfter: '', status, readings: [], createdAt,
+    summary: '', recordWords: 0, steer: '', situationAfter: '', status, readings: [], createdAt,
   };
 }
 
@@ -60,7 +62,7 @@ function thread(id: string, text: string, openedInSceneId: string | null, closed
   };
 }
 
-function demoSnapshot(): RunSnapshot {
+function demoSnapshot(): RunOutline {
   const scenes = [
     scene('s1', 1, 'standing', '2026-01-01T00:00:01Z'),
     scene('s2-old', 2, 'struck', '2026-01-01T00:00:02Z'),
@@ -117,6 +119,7 @@ function demoSnapshot(): RunSnapshot {
     runEdits: [],
     entryEdits: [],
     waypointRewordings: [],
+    sceneEdits: [],
   };
 }
 
@@ -460,8 +463,8 @@ test('a withdrawn waypoint leaves ahead and reached for its own list, with its e
   assert.deepEqual(reached.map((item) => item.waypoint.id), ['w-reached']);
   assert.deepEqual(withdrawn.map((item) => [item.waypoint.id, item.withdrawnInSceneNumber, item.reachedInSceneNumber]), [['w-withdrawn', 2, 1]]);
   assert.deepEqual(withdrawn[0]?.earlierWordings, [
-    { text: 'The ferry leaks.', changedAfterSceneNumber: null },
-    { text: 'The ferry tips.', changedAfterSceneNumber: 1 },
+    { text: 'The ferry leaks.', changedAfterSceneNumber: null, writtenAt: writtenAtInWords('2026-01-01T00:00:34Z') },
+    { text: 'The ferry tips.', changedAfterSceneNumber: 1, writtenAt: writtenAtInWords('2026-01-01T00:00:35Z') },
   ]);
 });
 
@@ -482,8 +485,8 @@ test('the run\'s history is oldest first, with both values and the scene it chan
     { id: 'e1', runId: 'run', field: 'title', earlierValue: 'A mill', laterValue: 'The mill', afterSceneId: null, createdAt: '2026-01-01T00:00:00Z' },
   ];
   assert.deepEqual(runHistoryInWords(snapshot), [
-    { label: 'Title', earlier: '\u201cA mill\u201d', later: '\u201cThe mill\u201d', changedAfterSceneNumber: null },
-    { label: 'Status', earlier: '\u201cbinding\u201d', later: '\u201ca telling\u201d', changedAfterSceneNumber: 3 },
+    { label: 'Title', earlier: '\u201cA mill\u201d', later: '\u201cThe mill\u201d', changedAfterSceneNumber: null, writtenAt: writtenAtInWords('2026-01-01T00:00:00Z') },
+    { label: 'Status', earlier: '\u201cbinding\u201d', later: '\u201ca telling\u201d', changedAfterSceneNumber: 3, writtenAt: writtenAtInWords('2026-01-02T00:00:00Z') },
   ]);
 });
 
@@ -495,8 +498,8 @@ test('an entry\'s history reads a list of other names written as JSON, and a vis
     { id: 'x3', runId: 'run', entryId: 'ford', field: 'pronoun', earlierValue: '', laterValue: 'it', afterSceneId: null, createdAt: '2026-01-01T00:00:03Z' },
   ];
   assert.deepEqual(entryHistoryInWords('miller', snapshot), [
-    { label: 'Other names', earlier: 'nothing recorded', later: '\u201cthe old miller\u201d, \u201cWynn, the elder\u201d', changedAfterSceneNumber: 1 },
-    { label: 'Who sees it', earlier: '\u201copen\u201d', later: '\u201cauthor only\u201d', changedAfterSceneNumber: 2 },
+    { label: 'Other names', earlier: 'nothing recorded', later: '\u201cthe old miller\u201d, \u201cWynn, the elder\u201d', changedAfterSceneNumber: 1, writtenAt: writtenAtInWords('2026-01-01T00:00:01Z') },
+    { label: 'Who sees it', earlier: '\u201copen\u201d', later: '\u201cauthor only\u201d', changedAfterSceneNumber: 2, writtenAt: writtenAtInWords('2026-01-01T00:00:02Z') },
   ]);
   // A pronoun that was empty is said as nothing recorded, never as a typed word in quotation marks.
   assert.deepEqual(entryHistoryInWords('ford', snapshot).map((change) => [change.earlier, change.later]), [['nothing recorded', '\u201cit\u201d']]);
@@ -517,11 +520,11 @@ test('a box of names one per line has a row for every line and one more, never f
 test('a waypoint moved to another list is named, with the list it went to', () => {
   assert.equal(
     waypointMoveInWords({ kind: 'withdrawn', text: 'The baker pays the toll.' }),
-    '\u201cThe baker pays the toll.\u201d is withdrawn. It is kept among the waypoints withdrawn below, with what it said.',
+    'Withdrew \u201cThe baker pays the toll.\u201d It is kept among the waypoints withdrawn, with what it said.',
   );
   assert.equal(
     waypointMoveInWords({ kind: 'reached', text: 'The ford floods.', sceneNumber: 3 }),
-    '\u201cThe ford floods.\u201d is marked reached at scene 3. It is kept under Waypoints reached below.',
+    'Marked \u201cThe ford floods.\u201d reached at scene 3. It is under Waypoints reached.',
   );
 });
 
@@ -697,7 +700,7 @@ test('a file that is not a backup is refused in the contract\'s words, and nothi
   assert.match(otherKind.ok ? '' : otherKind.reason, /not a Timeweft backup of a run.*Nothing was sent\./);
 
   const laterVersion = restoreToSend(JSON.stringify({ ...aBackupOfTheMill(), formatVersion: 99 }), false);
-  assert.match(laterVersion.ok ? '' : laterVersion.reason, /format version 99, and this server reads version 1 only/);
+  assert.match(laterVersion.ok ? '' : laterVersion.reason, /format version 99, and this server reads versions 1 and 2 only/);
 
   const cutShort = aBackupOfTheMill() as unknown as { tables: Record<string, unknown> };
   delete cutShort.tables['collisions'];
@@ -741,4 +744,89 @@ test('a restore is told in counts and in the order the tables are written, namin
 test('a size is said whole where it is whole, and to one place where it is not', () => {
   assert.equal(megabytesInWords(200 * 1024 * 1024), '200 MB');
   assert.equal(megabytesInWords(1.25 * 1024 * 1024), '1.3 MB');
+});
+
+// After an act
+
+const plainNotice: Notice = { words: 'Added the waypoint.', cautions: [], link: null };
+const linkedNotice: Notice = { words: 'Closed the thread.', cautions: [], link: { href: '#/runs/the-mill/threads/t1', words: 'Show it' } };
+
+test('a notice replaces the one before, and a plain one goes at the next act, a route change or when its time is up', () => {
+  let state: NoticeState = noticeAfter(null, { kind: 'act-done', notice: plainNotice, focusWhenShown: false });
+  const second: Notice = { ...plainNotice, words: 'Stated the miller\'s standing.' };
+  state = noticeAfter(state, { kind: 'act-done', notice: second, focusWhenShown: false });
+  assert.equal(state?.notice.words, second.words);
+  assert.equal(state?.number, 2);
+  assert.equal(noticeAfter(state, { kind: 'act-started' }), null);
+  assert.equal(noticeAfter(state, { kind: 'route-changed' }), null);
+  // A timer set for the first notice does not take down the second.
+  assert.equal(noticeAfter(state, { kind: 'time-passed', number: 1 }), state);
+  assert.equal(noticeAfter(state, { kind: 'time-passed', number: 2 }), null);
+});
+
+test('a notice holding a link, or a caution, stays until it is dismissed or replaced', () => {
+  const withLink = noticeAfter(null, { kind: 'act-done', notice: linkedNotice, focusWhenShown: true });
+  assert.equal(noticeStaysUntilDismissed(linkedNotice), true);
+  assert.equal(noticeStaysUntilDismissed({ ...plainNotice, cautions: ['Two entries answer to that name.'] }), true);
+  assert.equal(noticeStaysUntilDismissed(plainNotice), false);
+  assert.equal(noticeAfter(withLink, { kind: 'act-started' }), withLink);
+  assert.equal(noticeAfter(withLink, { kind: 'route-changed' }), withLink);
+  assert.equal(noticeAfter(withLink, { kind: 'time-passed', number: 1 }), withLink);
+  assert.equal(noticeAfter(withLink, { kind: 'dismissed' }), null);
+  assert.equal(noticeAfter(withLink, { kind: 'act-done', notice: plainNotice, focusWhenShown: false })?.notice, plainNotice);
+  // Focus is moved to it once, then the notice no longer asks for it.
+  assert.equal(withLink?.focusWhenShown, true);
+  assert.equal(noticeAfter(withLink, { kind: 'focus-moved' })?.focusWhenShown, false);
+});
+
+test('a refusal beside a form stays until the form is edited, and a success says nothing there', () => {
+  let state: ActState = { state: 'idle' };
+  state = actStateAfter(state, { kind: 'started' });
+  assert.deepEqual(state, { state: 'running' });
+  state = actStateAfter(state, { kind: 'refused', message: 'Say what is left open.' });
+  assert.deepEqual(state, { state: 'refused', message: 'Say what is left open.' });
+  assert.deepEqual(actStateAfter(state, { kind: 'edited' }), { state: 'idle' });
+  assert.deepEqual(actStateAfter({ state: 'running' }, { kind: 'edited' }), { state: 'running' });
+  assert.deepEqual(actStateAfter({ state: 'running' }, { kind: 'taken' }), { state: 'idle' });
+});
+
+test('a quoted sentence gets no second mark where the quoted text ends in its own', () => {
+  assert.equal(quotedSentence('Closed ', 'Will the ferry run?'), 'Closed \u201cWill the ferry run?\u201d');
+  assert.equal(quotedSentence('Closed ', 'The toll is paid.'), 'Closed \u201cThe toll is paid.\u201d');
+  assert.equal(quotedSentence('Closed ', 'the toll'), 'Closed \u201cthe toll\u201d.');
+  assert.equal(quotedSentence('Keep it and drop ', 'about forty?', '?'), 'Keep it and drop \u201cabout forty?\u201d');
+  assert.equal(quotedSentence('Keep it and drop ', 'about forty', '?'), 'Keep it and drop \u201cabout forty\u201d?');
+  assert.equal(markReachedQuestion('The ford floods.', 45), 'Mark it reached at scene 45? A story stops steering towards \u201cThe ford floods.\u201d');
+});
+
+test('settling a collision asks a question naming both values', () => {
+  const item = {
+    collision: { id: 'c1', runId: 'run', entryId: 'miller', property: 'age', standingFactId: 'f9', proposedValue: 'about forty', proposedAboutEntryId: null, sceneId: 's3', state: 'waiting', createdAt: '2026-01-01T00:00:30Z' },
+    entryName: 'the miller', property: 'age', authorsValue: 'sixty', authorsAboutName: null, storysValue: 'about forty', storysAboutName: null, sceneNumber: 3,
+  } as unknown as Parameters<typeof settleCollisionQuestion>[0];
+  assert.equal(settleCollisionQuestion(item, 'author'), "Keep \u201csixty\u201d and drop the story's \u201cabout forty\u201d?");
+  assert.equal(settleCollisionQuestion(item, 'story'), "Take the story's \u201cabout forty\u201d and drop \u201csixty\u201d?");
+  assert.equal(settleCollisionQuestion({ ...item, storysValue: 'is he forty?' }, 'author'), "Keep \u201csixty\u201d and drop the story's \u201cis he forty?\u201d");
+  const lost = { ...item, authorsValue: null, storysValue: 'sixty' };
+  assert.equal(settleCollisionQuestion(lost, 'author'), "Keep the fact the store no longer holds and drop the story's \u201csixty\u201d?");
+});
+
+test('a caution naming entries that share a name tells them apart in words, with no id in it', () => {
+  const snapshot = demoSnapshot();
+  const caution = '"the miller" also answers to "the miller" (id miller) and "the ferry" (id ferry). A story naming it will be refused until only one entry goes by it.';
+  const said = cautionInWords(caution, snapshot);
+  assert.equal(
+    said,
+    '\u201cthe miller\u201d also answers to \u201cthe miller\u201d (a person, first named at scene 1) and \u201cthe ferry\u201d (a place, named before the scenes). A story naming it will be refused until only one entry goes by it.',
+  );
+  assert.doesNotMatch(said, /\bid\b|miller\)|ferry\)/);
+  assert.doesNotMatch(cautionInWords('"x" also answers to "y" (id gone).', snapshot), /\(id /);
+});
+
+test('a history line says the day and time of day it was written', () => {
+  assert.equal(writtenAtInWords('2026-11-14T11:20:59Z', 'UTC'), '14 Nov 11:20');
+  assert.equal(writtenAtInWords('2026-01-03T00:05:00Z', 'UTC'), '3 Jan 00:05');
+  assert.equal(writtenAtInWords('not a time'), '');
+  assert.equal(changedWhenAndAtInWords(45, '14 Nov 11:20'), 'after scene 45, 14 Nov 11:20');
+  assert.equal(changedWhenAndAtInWords(null, ''), 'before the scenes');
 });

@@ -30,13 +30,13 @@ test('a format version is said in its own words, never as a version the store re
   assert.equal(whyTheFormatVersionIsNotRead(1), null);
   for (const version of ['1', 1.5, true]) {
     const sentence = refusalOf(documentOf({ formatVersion: version }));
-    assert.match(sentence, /not a whole number, and this server reads version 1 only/, String(version));
+    assert.match(sentence, /not a whole number, and this server reads versions 1 and 2 only/, String(version));
     assert.doesNotMatch(sentence, /written in format version/);
   }
   const missing = documentOf({});
   delete missing['formatVersion'];
   assert.match(refusalOf(missing), /^This backup does not say which format version it is written in/);
-  assert.match(refusalOf(documentOf({ formatVersion: 99 })), /written in format version 99, and this server reads version 1 only/);
+  assert.match(refusalOf(documentOf({ formatVersion: 99 })), /written in format version 99, and this server reads versions 1 and 2 only/);
 });
 
 test('restore_run takes any format version and leaves the saying to the backup\'s own reader', () => {

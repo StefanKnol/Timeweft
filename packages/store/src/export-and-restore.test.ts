@@ -64,7 +64,7 @@ async function storyBriefing(of: Store, slug: string) {
 /**
  * A busy run: two scenes and a redone third with its struck take, clock readings, a journey, a
  * ruling withdrawn, threads opened, touched by a scene and by the author and closed, a waypoint
- * reached, one reworded and one withdrawn, the run and an entry edited, a fact ended, an
+ * reached, one reworded and one withdrawn, the run, an entry and a saved scene edited, a fact ended, an
  * author-only entry and an author-only fact, a collision settled and one waiting.
  */
 async function busyRun(of: Store = store): Promise<string> {
@@ -123,6 +123,7 @@ async function busyRun(of: Store = store): Promise<string> {
   await store.withdrawRuling(inputOf('withdraw_ruling', { ruling: ruling.id }));
   const heldBy = (await store.snapshotOf(slug, 'author')).facts.find((fact) => fact.property === 'held by' && fact.untilSceneId === null)!;
   await store.endFact(inputOf('end_fact', { fact: heldBy.id }));
+  await store.editScene(inputOf('edit_scene', { run: slug, sceneId: first.scene.id, title: 'The river rises at dawn', starred: true }));
   assert.ok(first.scene.id);
   return slug;
 }
@@ -297,7 +298,7 @@ test('a backup in a format version this store does not read is refused, saying w
   const document = asReadFromAFile(await store.exportRun(await busyRun()));
   document.formatVersion = 99;
   await assert.rejects(elsewhere.restoreRun(document, { replace: false }),
-    (error: unknown) => error instanceof Refusal && /version 99/.test(error.message) && /reads version 1 only/.test(error.message));
+    (error: unknown) => error instanceof Refusal && /version 99/.test(error.message) && /reads versions 1 and 2 only/.test(error.message));
 });
 
 test('rows a server would not write are refused by table and column, and nothing is written', async () => {

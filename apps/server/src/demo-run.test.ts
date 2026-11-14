@@ -57,6 +57,24 @@ test('a thread is closed or touched only after it was opened and while it is ope
   assert.equal(open.size, 150);
 });
 
+test('the author edits a handful of scenes once the run is written, each edit changing what it names', () => {
+  const plan = planOfDemoRun();
+  const byNumber = new Map(plan.scenes.map((scene) => [scene.number, scene]));
+  assert.ok(plan.sceneEdits.length >= 6);
+  const editedNumbers = new Set(plan.sceneEdits.map((edit) => edit.number));
+  assert.ok(editedNumbers.size >= 6, 'a handful of scenes, one of them edited twice');
+  assert.ok(editedNumbers.has(420), 'what stood after the newest scene is reworded');
+  for (const { number, ...fields } of plan.sceneEdits) {
+    const scene = byNumber.get(number);
+    assert.ok(scene, `scene ${number} is in the plan`);
+    assert.ok(Object.keys(fields).length > 0, `the edit of scene ${number} changes something`);
+    for (const [field, value] of Object.entries(fields)) {
+      assert.notEqual(value, (scene as unknown as Record<string, unknown>)[field], `scene ${number}: ${field} differs`);
+    }
+  }
+  assert.ok(planOfDemoRun(2).sceneEdits.length >= 2, 'a short run is edited too');
+});
+
 test('the shares of a total add up to the total', () => {
   let sum = 0;
   for (let index = 0; index < 37; index += 1) sum += shareOfScene(index, 101, 37);

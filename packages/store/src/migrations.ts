@@ -49,11 +49,11 @@ export const WRITE_MARKS = 'timeweft_write_marks';
 export const TABLES_A_RUN_WRITES = ['clocks', 'scenes', 'entries', 'facts', 'entry_notes', 'rulings', 'threads', 'waypoints', 'journey_legs'] as const;
 
 /**
- * The tables migration 6 adds for the author's hand, each carrying a write mark from the start. Kept
- * apart from `TABLES_A_RUN_WRITES` because migration 4 walks that list and these tables do not exist
- * when it runs; replacing an earlier import counts both lists.
+ * The tables migrations 6 and 8 add for the author's hand, each carrying a write mark from the start.
+ * Kept apart from `TABLES_A_RUN_WRITES` because migration 4 walks that list and these tables do not
+ * exist when it runs; replacing an earlier import counts both lists.
  */
-export const TABLES_THE_AUTHORS_HAND_WRITES = ['waypoint_rewordings', 'run_edits', 'entry_edits'] as const;
+export const TABLES_THE_AUTHORS_HAND_WRITES = ['waypoint_rewordings', 'run_edits', 'entry_edits', 'scene_edits'] as const;
 
 /** The marks migration 4 gives the rows stored before marks were kept. The sequence starts above them. */
 export const IMPORTS_OWN_MARK = 1;
@@ -415,6 +415,30 @@ export const MIGRATIONS: Migration[] = [
       // time, but the check would fire between the removal and the writing. Deferrable, the restore
       // asks for the check at the end of its transaction; every other write still has it at once.
       `alter table runs alter constraint runs_continues_run_id_fkey deferrable initially immediate`,
+    ],
+  },
+  {
+    number: 8,
+    name: 'the author edits a scene',
+    statements: [
+      // The earlier values of a saved scene the author changed in place, one row per field changed, as
+      // entry_edits keeps an entry's. scene_id is the take the change was made to, and stays so when
+      // that take is later struck; after_scene_id dates the change to the newest standing scene when it
+      // was made, and a redo of that scene moves it onto the new take. A place is kept as its entry's
+      // id or the empty string, a star as true or false.
+      `create table scene_edits (
+        ${KEEPS_ITS_OWN_ID},
+        run_id uuid not null references runs(id) on delete cascade,
+        scene_id uuid not null references scenes(id) on delete cascade,
+        field text not null check (field in ('title', 'summary', 'whenTyped', 'placeEntryId', 'record', 'steer', 'situationAfter', 'starred')),
+        earlier_value text not null,
+        later_value text not null,
+        after_scene_id uuid references scenes(id),
+        ${WHEN_WRITTEN},
+        ${ORDER_WRITTEN},
+        write_mark bigint not null default nextval('${WRITE_MARKS}')
+      )`,
+      `create index scene_edits_by_run on scene_edits (run_id, written_order)`,
     ],
   },
 ];
