@@ -157,6 +157,12 @@ failure only, and the server carries on. In a container, mount a folder there th
 user can write to; `compose.example.yml` shows one. Copy that folder somewhere else as well: a
 backup on the same disk as the database is lost with it.
 
+**Which user the container runs as.** Unless told otherwise it runs as user id 1000. The server
+writes nowhere but the backup folder, so the container can run as any user: start it with
+`--user <user id>:<group id>` and the backups are owned by that user. On Unraid, `--user 99:100`
+(`nobody:users`, under *Extra Parameters*) makes the files match the rest of the shares, with no
+`chown` of the folder needed.
+
 ### Behind a hub or a proxy
 
 The pages ask for the access token once and send it three ways with every request: as
