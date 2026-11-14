@@ -38,6 +38,32 @@ export interface RunRecord {
 }
 
 /**
+ * The parts of a run the author may change from their pages. Each is a value the run holds now;
+ * what it held before is kept, one `RunEditRecord` per change.
+ */
+export const RUN_FIELDS_THE_AUTHOR_EDITS = ['title', 'setting', 'register', 'status'] as const;
+export type RunFieldTheAuthorEdits = (typeof RUN_FIELDS_THE_AUTHOR_EDITS)[number];
+
+/**
+ * One change the author made to a run: which part, what it said before and what it says after.
+ * The run's row holds the newest value, and these rows hold every earlier one, oldest first, so
+ * nothing the run ever said is lost.
+ *
+ * `afterSceneId` dates the change as every author act made outside a scene is dated: the newest
+ * standing scene when it was made, or null where the run had none yet. A redo of that scene moves
+ * the date onto the new take and never undoes the change.
+ */
+export interface RunEditRecord {
+  id: Id;
+  runId: Id;
+  field: RunFieldTheAuthorEdits;
+  earlierValue: string;
+  laterValue: string;
+  afterSceneId: Id | null;
+  createdAt: string;
+}
+
+/**
  * A clock is one named count a run keeps: days since an event, days in one place. A run may keep
  * several side by side, since two places need not share a day. A count is exact; what the clock
  * counts from may be given its own date later, and every reading then resolves.
@@ -123,7 +149,38 @@ export interface EntryRecord {
   pronoun: string;
   introducedInSceneId: Id | null;
   source: Source;
+  /**
+   * The author may turn an entry author-only, or open again, at any time. Author-only takes the
+   * entry, every fact about it or pointing at it, its trail and every journey leg naming it out of
+   * every story answer at once;
+   * nothing is moved or closed to do it, so turning it open again puts all of it back.
+   */
   visibility: Visibility;
+  createdAt: string;
+}
+
+/**
+ * The parts of an entry the author may change from their pages. A rename is a change to `name`
+ * that also adds the old name to `alsoKnownAs`, so the entry stays findable by what it was called.
+ */
+export const ENTRY_FIELDS_THE_AUTHOR_EDITS = ['name', 'alsoKnownAs', 'pronoun', 'kind', 'visibility'] as const;
+export type EntryFieldTheAuthorEdits = (typeof ENTRY_FIELDS_THE_AUTHOR_EDITS)[number];
+
+/**
+ * One change the author made to an entry. The entry's row holds the newest value, and these rows
+ * hold every earlier one, oldest first. For `alsoKnownAs` both values are the whole list, written
+ * as a JSON array of strings, so a name holding any character comes back as it was.
+ *
+ * Dated as `RunEditRecord` is. Never served to a story: a story reads an entry as it is now.
+ */
+export interface EntryEditRecord {
+  id: Id;
+  runId: Id;
+  entryId: Id;
+  field: EntryFieldTheAuthorEdits;
+  earlierValue: string;
+  laterValue: string;
+  afterSceneId: Id | null;
   createdAt: string;
 }
 
@@ -131,7 +188,8 @@ export interface EntryRecord {
  * One fact about an entry: a property and its value, holding from one scene until another.
  *
  * `untilSceneId` is null while the fact still holds. A fact that replaced another closed it;
- * nothing is ever written over.
+ * nothing is ever written over. A fact the author ended with nothing in its place is closed the
+ * same way, at the newest standing scene, and no fact follows it on that property.
  */
 export interface FactRecord {
   id: Id;
@@ -186,7 +244,11 @@ export interface RulingRecord {
   aboutEntryIds: Id[];
   /** The scene it was given at, where known. */
   sceneId: Id | null;
-  /** The scene at which it stopped applying, if it has. */
+  /**
+   * The scene at which it stopped applying, if it has. A withdrawn ruling is kept and stays readable
+   * on the author's pages; only a story stops being told it. The author withdraws one as of the
+   * newest standing scene.
+   */
   withdrawnInSceneId: Id | null;
   createdAt: string;
 }
@@ -225,12 +287,35 @@ export interface ThreadRecord {
   createdAt: string;
 }
 
-/** A scene the author wants the run to reach. Never shown in the narration. */
+/**
+ * A scene the author wants the run to reach. A story is told to steer towards it and never to
+ * narrate it.
+ *
+ * `text` is the newest wording; every earlier one is kept as a `WaypointRewordingRecord`. A
+ * withdrawn waypoint is kept, readable on the author's pages, and never served to a story again.
+ */
 export interface WaypointRecord {
   id: Id;
   runId: Id;
   text: string;
+  /** The scene that reached it, named by a scene's save or by the author. Null while ahead. */
   reachedInSceneId: Id | null;
+  /** The newest standing scene when the author withdrew it. Null while it stands. */
+  withdrawnInSceneId: Id | null;
+  createdAt: string;
+}
+
+/**
+ * One rewording of a waypoint: what it said before and what it says after. The waypoint keeps its
+ * id, so a chat holding that id still names the same waypoint. Dated as `RunEditRecord` is.
+ */
+export interface WaypointRewordingRecord {
+  id: Id;
+  runId: Id;
+  waypointId: Id;
+  earlierText: string;
+  laterText: string;
+  afterSceneId: Id | null;
   createdAt: string;
 }
 
@@ -287,7 +372,14 @@ export interface RunSnapshot {
   notes: EntryNoteRecord[];
   rulings: RulingRecord[];
   threads: ThreadRecord[];
+  /** Withdrawn ones included for the author. A story is served only those not withdrawn. */
   waypoints: WaypointRecord[];
   legs: JourneyLegRecord[];
   collisions: CollisionRecord[];
+  /** Every change the author made to the run, oldest first. Empty for a story. */
+  runEdits: RunEditRecord[];
+  /** Every change the author made to an entry, oldest first. Empty for a story. */
+  entryEdits: EntryEditRecord[];
+  /** Every rewording of a waypoint, oldest first. Empty for a story, which reads the newest wording. */
+  waypointRewordings: WaypointRewordingRecord[];
 }

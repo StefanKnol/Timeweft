@@ -7,7 +7,10 @@
   "scripts": {
     "test": "node --test --experimental-strip-types \"packages/*/src/**/*.test.ts\" \"apps/*/src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "check-no-canon": "node scripts/check-no-canon.mjs"
+    "check-no-canon": "node scripts/check-no-canon.mjs",
+    "export-run": "pnpm --silent --filter @timeweft/server export-run",
+    "export-all": "pnpm --silent --filter @timeweft/server export-all",
+    "restore-run": "pnpm --silent --filter @timeweft/server restore-run"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

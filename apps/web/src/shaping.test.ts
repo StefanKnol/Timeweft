@@ -7,9 +7,17 @@ import type {
 import {
   budgetFromText, collisionsWithBothSides, entriesGroupedByKind, factsOfEntryByProperty, hashOfRoute,
   heldSpanInWords, isAuthorOnly, outcomeOfResponse, readingsWithClockNames, routeFromHash,
-  routeOfOperation, rulingsMatching, scenesByNumber, sizeInWords, threadsOpenFirst, trailOfEntry,
+  routeOfOperation, rulingsMatching, scenesByNumber, sizeInWords, threadLastTouchInWords, threadsOpenFirst, trailOfEntry, quotedNamesInWords, quotedValueInWords, rowsForLinesOf, waypointMoveInWords,
   upcomingNamesFromText, waypointsAheadFirst, journeysInSceneOrder, whatASceneEstablished,
+  asOfNowInWords, cautionsOfAnswer, entriesARulingMayName, entriesAThreadMayBeAbout, entryDetailsFormOf, entryEditToSend, entryHistoryInWords,
+  factToSend, lastingActInWords, newEntryToSend, newestStandingScene, renameToSend, runDetailsFormOf, runEditToSend,
+  runHistoryInWords, rulingToSend, rulingsSplitByWithdrawal, standingSceneNumbers, typedTextOrReason, whyAnActNeedsAScene,
+  EMPTY_FACT_FORM,
+  LARGEST_BACKUP_FILE_BYTES_READ, LARGEST_RESTORE_BODY_BYTES, REPLACE_ON_RESTORE_SENTENCE, bodyBytesOf, backupDownloadOf, restoreButtonText, restoreToSend,
+  restoredInWords, runRowCountsInWords, whyBackupFileCannotStart,
+  megabytesInWords,
 } from './shaping.ts';
+import { RUN_EXPORT_TABLE_NAMES, runExportDocumentAsText, type RestoredRunReport, type RunExportDocument, type RunExportRowCounts, type RunRecord } from '@timeweft/contract';
 
 // A made-up demo world: a miller, a ferry, a ford and a lantern.
 
@@ -95,9 +103,9 @@ function demoSnapshot(): RunSnapshot {
       thread('t-early', 'Where does the ferry go at night?', 's1', null, '2026-01-01T00:00:07Z'),
     ],
     waypoints: [
-      { id: 'w-reached', runId: 'run', text: 'The miller pays the toll.', reachedInSceneId: 's3', createdAt: '2026-01-01T00:00:30Z' },
-      { id: 'w-ahead', runId: 'run', text: 'The ford floods.', reachedInSceneId: null, createdAt: '2026-01-01T00:00:31Z' },
-      { id: 'w-struck', runId: 'run', text: 'The lantern breaks.', reachedInSceneId: 's2-old', createdAt: '2026-01-01T00:00:32Z' },
+      { id: 'w-reached', runId: 'run', text: 'The miller pays the toll.', reachedInSceneId: 's3', withdrawnInSceneId: null, createdAt: '2026-01-01T00:00:30Z' },
+      { id: 'w-ahead', runId: 'run', text: 'The ford floods.', reachedInSceneId: null, withdrawnInSceneId: null, createdAt: '2026-01-01T00:00:31Z' },
+      { id: 'w-struck', runId: 'run', text: 'The lantern breaks.', reachedInSceneId: 's2-old', withdrawnInSceneId: null, createdAt: '2026-01-01T00:00:32Z' },
     ],
     legs: [
       { id: 'leg-later', runId: 'run', fromPlace: 'the ford', toPlace: 'the ferry', duration: 'an hour', note: '', sceneId: 's3', createdAt: '2026-01-01T00:00:41Z' },
@@ -106,6 +114,9 @@ function demoSnapshot(): RunSnapshot {
       { id: 'leg-undated', runId: 'run', fromPlace: 'the ferry', toPlace: 'the sea', duration: 'a week', note: '', sceneId: null, createdAt: '2026-01-01T00:00:38Z' },
     ],
     collisions: [],
+    runEdits: [],
+    entryEdits: [],
+    waypointRewordings: [],
   };
 }
 
@@ -256,6 +267,19 @@ test('threads: one opened early and touched in a later scene ranks by its touch,
   assert.equal(open[0]?.lastTouchNote, 'The ferry was seen at the ford.');
 });
 
+test('threads: a touch at the scene the thread opened in is still drawn, with its note', () => {
+  const snapshot = demoSnapshot();
+  snapshot.threads = snapshot.threads.map((each) => (each.id === 't-later'
+    ? { ...each, touches: [{ sceneId: each.openedInSceneId!, note: 'The baker promises coin by market day.' }], lastTouchedInSceneId: each.openedInSceneId }
+    : each));
+  const { open } = threadsOpenFirst(snapshot.threads, snapshot.scenes);
+  const touched = open.find((item) => item.thread.id === 't-later')!;
+  assert.equal(touched.openedInSceneNumber, touched.lastTouch?.sceneNumber);
+  assert.equal(threadLastTouchInWords(touched), `Last touched at scene ${touched.openedInSceneNumber}: The baker promises coin by market day.`);
+  const untouched = open.find((item) => item.thread.id === 't-early')!;
+  assert.equal(threadLastTouchInWords(untouched), '');
+});
+
 test('threads: of two last touched in one scene, the one opened in the newer scene first, as the briefing ranks them', () => {
   const snapshot = demoSnapshot();
   snapshot.threads = [
@@ -360,4 +384,320 @@ test('a thread is closed by the scene that closed it, not by having a resolution
   const { open, closed } = threadsOpenFirst([closedWithoutWords, openWithWords], snapshot.scenes);
   assert.deepEqual(open.map((item) => item.thread.id), ['t-noted']);
   assert.deepEqual(closed.map((item) => item.thread.id), ['t-quiet']);
+});
+
+// ---------------------------------------------------------------------------------------------
+// The author's hand
+
+test('an act outside a scene is dated to the newest standing scene, and a struck take is never it', () => {
+  const snapshot = demoSnapshot();
+  snapshot.scenes.push(scene('s4-struck', 4, 'struck', '2026-01-01T00:00:05Z'));
+  assert.equal(newestStandingScene(snapshot)?.id, 's3');
+  assert.equal(asOfNowInWords(snapshot), 'as of scene 3');
+  assert.equal(whyAnActNeedsAScene(snapshot), null);
+  assert.deepEqual(standingSceneNumbers(snapshot), [1, 2, 3]);
+});
+
+test('with no standing scene, an act that must stop at a scene says why it waits', () => {
+  const snapshot = demoSnapshot();
+  snapshot.scenes = [scene('only-struck', 1, 'struck', '2026-01-01T00:00:01Z')];
+  assert.equal(newestStandingScene(snapshot), null);
+  assert.equal(asOfNowInWords(snapshot), 'before the scenes');
+  assert.match(whyAnActNeedsAScene(snapshot) ?? '', /no scene yet/);
+  assert.deepEqual(standingSceneNumbers(snapshot), []);
+});
+
+test('a withdrawn waypoint leaves ahead and reached for its own list, with its earlier wordings oldest first', () => {
+  const snapshot = demoSnapshot();
+  snapshot.waypoints.push({ id: 'w-withdrawn', runId: 'run', text: 'The ferry sinks.', reachedInSceneId: 's1', withdrawnInSceneId: 's2', createdAt: '2026-01-01T00:00:33Z' });
+  snapshot.waypointRewordings = [
+    { id: 'rw2', runId: 'run', waypointId: 'w-withdrawn', earlierText: 'The ferry tips.', laterText: 'The ferry sinks.', afterSceneId: 's1', createdAt: '2026-01-01T00:00:35Z' },
+    { id: 'rw1', runId: 'run', waypointId: 'w-withdrawn', earlierText: 'The ferry leaks.', laterText: 'The ferry tips.', afterSceneId: null, createdAt: '2026-01-01T00:00:34Z' },
+  ];
+  const { ahead, reached, withdrawn } = waypointsAheadFirst(snapshot);
+  assert.deepEqual(ahead.map((item) => item.waypoint.id), ['w-ahead', 'w-struck']);
+  assert.deepEqual(reached.map((item) => item.waypoint.id), ['w-reached']);
+  assert.deepEqual(withdrawn.map((item) => [item.waypoint.id, item.withdrawnInSceneNumber, item.reachedInSceneNumber]), [['w-withdrawn', 2, 1]]);
+  assert.deepEqual(withdrawn[0]?.earlierWordings, [
+    { text: 'The ferry leaks.', changedAfterSceneNumber: null },
+    { text: 'The ferry tips.', changedAfterSceneNumber: 1 },
+  ]);
+});
+
+test('editing the run sends only what changed, keeps the setting and register as typed, and refuses an empty title', () => {
+  const { run } = demoSnapshot();
+  const form = runDetailsFormOf(run);
+  assert.deepEqual(runEditToSend('the-mill', run, form), { ok: false, reason: 'Nothing here differs from what the run holds.' });
+  const changed = runEditToSend('the-mill', run, { ...form, title: '  The mill race ', setting: '  A valley.\n', register: ' plain,\npast tense\n' });
+  assert.deepEqual(changed, { ok: true, input: { run: 'the-mill', title: 'The mill race', setting: '  A valley.\n', register: ' plain,\npast tense\n' } });
+  assert.deepEqual(runEditToSend('the-mill', run, { ...form, status: 'telling' }), { ok: true, input: { run: 'the-mill', status: 'telling' } });
+  assert.equal(runEditToSend('the-mill', run, { ...form, title: '   ' }).ok, false);
+});
+
+test('the run\'s history is oldest first, with both values and the scene it changed after', () => {
+  const snapshot = demoSnapshot();
+  snapshot.runEdits = [
+    { id: 'e2', runId: 'run', field: 'status', earlierValue: 'binding', laterValue: 'telling', afterSceneId: 's3', createdAt: '2026-01-02T00:00:00Z' },
+    { id: 'e1', runId: 'run', field: 'title', earlierValue: 'A mill', laterValue: 'The mill', afterSceneId: null, createdAt: '2026-01-01T00:00:00Z' },
+  ];
+  assert.deepEqual(runHistoryInWords(snapshot), [
+    { label: 'Title', earlier: '\u201cA mill\u201d', later: '\u201cThe mill\u201d', changedAfterSceneNumber: null },
+    { label: 'Status', earlier: '\u201cbinding\u201d', later: '\u201ca telling\u201d', changedAfterSceneNumber: 3 },
+  ]);
+});
+
+test('an entry\'s history reads a list of other names written as JSON, and a visibility in words', () => {
+  const snapshot = demoSnapshot();
+  snapshot.entryEdits = [
+    { id: 'x1', runId: 'run', entryId: 'miller', field: 'alsoKnownAs', earlierValue: '[]', laterValue: '["the old miller","Wynn, the elder"]', afterSceneId: 's1', createdAt: '2026-01-01T00:00:01Z' },
+    { id: 'x2', runId: 'run', entryId: 'miller', field: 'visibility', earlierValue: 'open', laterValue: 'author-only', afterSceneId: 's2', createdAt: '2026-01-01T00:00:02Z' },
+    { id: 'x3', runId: 'run', entryId: 'ford', field: 'pronoun', earlierValue: '', laterValue: 'it', afterSceneId: null, createdAt: '2026-01-01T00:00:03Z' },
+  ];
+  assert.deepEqual(entryHistoryInWords('miller', snapshot), [
+    { label: 'Other names', earlier: 'nothing recorded', later: '\u201cthe old miller\u201d, \u201cWynn, the elder\u201d', changedAfterSceneNumber: 1 },
+    { label: 'Who sees it', earlier: '\u201copen\u201d', later: '\u201cauthor only\u201d', changedAfterSceneNumber: 2 },
+  ]);
+  // A pronoun that was empty is said as nothing recorded, never as a typed word in quotation marks.
+  assert.deepEqual(entryHistoryInWords('ford', snapshot).map((change) => [change.earlier, change.later]), [['nothing recorded', '\u201cit\u201d']]);
+});
+
+test('other names are each in their own quotation marks, so a name holding a comma reads as one name', () => {
+  assert.equal(quotedNamesInWords(['the wheel', 'Old Paddle, the slow one']), '\u201cthe wheel\u201d, \u201cOld Paddle, the slow one\u201d');
+  assert.equal(quotedNamesInWords([]), 'nothing recorded');
+  assert.equal(quotedValueInWords(''), 'nothing recorded');
+});
+
+test('a box of names one per line has a row for every line and one more, never fewer than two', () => {
+  assert.equal(rowsForLinesOf(''), 2);
+  assert.equal(rowsForLinesOf('the wheel'), 2);
+  assert.equal(rowsForLinesOf('the wheel\nOld Paddle, the slow one\nThe Mill Wheel'), 4);
+});
+
+test('a waypoint moved to another list is named, with the list it went to', () => {
+  assert.equal(
+    waypointMoveInWords({ kind: 'withdrawn', text: 'The baker pays the toll.' }),
+    '\u201cThe baker pays the toll.\u201d is withdrawn. It is kept among the waypoints withdrawn below, with what it said.',
+  );
+  assert.equal(
+    waypointMoveInWords({ kind: 'reached', text: 'The ford floods.', sceneNumber: 3 }),
+    '\u201cThe ford floods.\u201d is marked reached at scene 3. It is kept under Waypoints reached below.',
+  );
+});
+
+test('editing an entry sends only what changed, the other names as the whole list', () => {
+  const miller = { ...demoSnapshot().entries[0]!, alsoKnownAs: ['the old miller'], pronoun: 'he' };
+  const form = entryDetailsFormOf(miller);
+  assert.equal(form.alsoKnownAsText, 'the old miller');
+  assert.deepEqual(entryEditToSend(miller, form), { ok: false, reason: 'Nothing here differs from what the entry holds.' });
+  assert.deepEqual(entryEditToSend(miller, { ...form, alsoKnownAsText: 'the old miller\n Wynn ' }), { ok: true, input: { entry: 'miller', alsoKnownAs: ['the old miller', 'Wynn'] } });
+  assert.deepEqual(entryEditToSend(miller, { ...form, alsoKnownAsText: '' }), { ok: true, input: { entry: 'miller', alsoKnownAs: [] } });
+  assert.deepEqual(entryEditToSend(miller, { ...form, kind: 'group', pronoun: ' they ' }), { ok: true, input: { entry: 'miller', kind: 'group', pronoun: 'they' } });
+});
+
+test('an other name holding a comma is kept whole when only the pronoun or the kind is changed', () => {
+  const miller = { ...demoSnapshot().entries[0]!, alsoKnownAs: ['Odo, the miller', 'Wynn'], pronoun: 'he' };
+  const form = entryDetailsFormOf(miller);
+  assert.equal(form.alsoKnownAsText, 'Odo, the miller\nWynn');
+  assert.deepEqual(entryEditToSend(miller, { ...form, pronoun: 'they' }), { ok: true, input: { entry: 'miller', pronoun: 'they' } });
+  assert.deepEqual(entryEditToSend(miller, { ...form, kind: 'group' }), { ok: true, input: { entry: 'miller', kind: 'group' } });
+});
+
+test('a thread is offered only open entries to be about, by name', () => {
+  const [first, second] = demoSnapshot().entries;
+  const hidden = { ...first!, name: 'a hidden heir', visibility: 'author-only' as const };
+  const shown = { ...second!, name: 'a baker' };
+  assert.deepEqual(entriesAThreadMayBeAbout([hidden, shown]).map((entry) => entry.name), ['a baker']);
+});
+
+test('a rename is refused when empty or unchanged, and trimmed when sent', () => {
+  const miller = demoSnapshot().entries[0]!;
+  assert.equal(renameToSend(miller, '  ').ok, false);
+  assert.deepEqual(renameToSend(miller, 'the miller'), { ok: false, reason: 'It is called the miller already.' });
+  assert.deepEqual(renameToSend(miller, ' Wynn the miller '), { ok: true, input: { entry: 'miller', name: 'Wynn the miller' } });
+});
+
+test('a new entry is sent with its other names one per line, and may be author only', () => {
+  assert.deepEqual(
+    newEntryToSend('the-mill', { name: ' the baker ', kind: 'person', alsoKnownAsText: 'Bryn\nthe baker\nbryn\nBryn, of the oven', pronoun: 'she', visibility: 'author-only' }),
+    { ok: true, input: { run: 'the-mill', name: 'the baker', kind: 'person', alsoKnownAs: ['Bryn', 'the baker', 'Bryn, of the oven'], pronoun: 'she', visibility: 'author-only' } },
+  );
+  assert.equal(newEntryToSend('the-mill', { name: '', kind: 'item', alsoKnownAsText: '', pronoun: '', visibility: 'open' }).ok, false);
+});
+
+test('a fact names its entry and what it points at by id, and needs a property and a value', () => {
+  assert.deepEqual(
+    factToSend('the-mill', 'lantern', { property: ' Held by ', value: ' the miller ', aboutEntryId: 'miller', visibility: 'open', note: '' }),
+    { ok: true, input: { run: 'the-mill', entryId: 'lantern', property: 'Held by', value: 'the miller', aboutEntryId: 'miller', visibility: 'open', note: '' } },
+  );
+  const pointingNowhere = factToSend('the-mill', 'lantern', { ...EMPTY_FACT_FORM, property: 'state', value: 'lit', visibility: 'author-only' });
+  assert.ok(pointingNowhere.ok);
+  assert.equal(pointingNowhere.ok && 'aboutEntryId' in pointingNowhere.input, false);
+  assert.equal(pointingNowhere.ok && pointingNowhere.input.visibility, 'author-only');
+  assert.equal(factToSend('the-mill', 'lantern', { ...EMPTY_FACT_FORM, property: 'state' }).ok, false);
+  assert.equal(factToSend('the-mill', 'lantern', { ...EMPTY_FACT_FORM, value: 'lit' }).ok, false);
+});
+
+test('a ruling may name only open entries, marks one whose name another shares, and is sent word for word', () => {
+  const snapshot = demoSnapshot();
+  snapshot.entries.push({ ...snapshot.entries[0]!, id: 'secret', name: 'the hermit', visibility: 'author-only' });
+  snapshot.entries.push({ ...snapshot.entries[0]!, id: 'miller-two', name: 'the elder', alsoKnownAs: ['The Miller'] });
+  const nameable = entriesARulingMayName(snapshot);
+  assert.equal(nameable.some((item) => item.entry.id === 'secret'), false);
+  assert.equal(nameable.find((item) => item.entry.id === 'miller')?.sharesItsName, true);
+  assert.equal(nameable.find((item) => item.entry.id === 'ford')?.sharesItsName, false);
+  const sent = rulingToSend('the-mill', { text: '  Tolls are paid\nat dusk. ', scope: 'world', topicsText: 'practice, time', aboutEntryIds: ['ford', 'gone'] }, snapshot);
+  assert.deepEqual(sent, {
+    ok: true,
+    input: { run: 'the-mill', text: '  Tolls are paid\nat dusk. ', statedByAuthor: true, scope: 'world', topics: ['practice', 'time'], about: ['the ford'] },
+  });
+  assert.equal(rulingToSend('the-mill', { text: '  ', scope: 'run', topicsText: '', aboutEntryIds: [] }, snapshot).ok, false);
+});
+
+test('rulings in force and withdrawn are kept apart, each by number', () => {
+  const snapshot = demoSnapshot();
+  snapshot.rulings.push({ ...snapshot.rulings[0]!, id: 'r3', number: 3, withdrawnInSceneId: 's3' });
+  const { inForce, withdrawn } = rulingsSplitByWithdrawal(snapshot.rulings);
+  assert.deepEqual(inForce.map((ruling) => ruling.id), ['r1', 'r2']);
+  assert.deepEqual(withdrawn.map((ruling) => ruling.id), ['r3']);
+});
+
+test('each lasting act says when it takes effect and that nothing is deleted', () => {
+  const snapshot = demoSnapshot();
+  for (const act of ['end-fact', 'withdraw-ruling', 'withdraw-waypoint', 'close-thread', 'turn-author-only'] as const) {
+    const words = lastingActInWords(act, snapshot);
+    assert.match(words, /Nothing is deleted/, act);
+  }
+  for (const act of ['end-fact', 'withdraw-ruling', 'withdraw-waypoint', 'close-thread'] as const) {
+    assert.match(lastingActInWords(act, snapshot), /as of scene 3/, act);
+  }
+  assert.match(lastingActInWords('turn-author-only', snapshot), /facts and its trail/);
+});
+
+test('cautions are read from an entry write, and any other answer has none', () => {
+  assert.deepEqual(cautionsOfAnswer({ entry: {}, cautions: ['Two entries answer to the miller.'] }), ['Two entries answer to the miller.']);
+  assert.deepEqual(cautionsOfAnswer({ id: 'w1', text: 'The ford floods.' }), []);
+  assert.deepEqual(cautionsOfAnswer(null), []);
+});
+
+test('typed text is trimmed, and nothing but spaces is a reason', () => {
+  assert.deepEqual(typedTextOrReason('  the ford  ', 'a name'), { ok: true, input: 'the ford' });
+  assert.deepEqual(typedTextOrReason(' \n ', 'a name'), { ok: false, reason: 'Write a name first.' });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Backing up a run and restoring one. A made-up demo run: the mill by the ford.
+
+function aBackupOfTheMill(): RunExportDocument {
+  const tables = Object.fromEntries(RUN_EXPORT_TABLE_NAMES.map((name) => [name, []])) as unknown as RunExportDocument['tables'];
+  tables.runs = [{
+    id: 'run-mill', slug: 'the-mill', title: 'The Mill', setting: 'by the ford', status: 'binding',
+    continues_run_id: null, register: '', created_at: '2026-11-13T09:30:00.123456Z', imported_through: null,
+  }];
+  return {
+    formatName: 'timeweft-run-export', formatVersion: 1, exportedAt: '2026-11-13T10:00:00.000001Z',
+    runSlug: 'the-mill', continuesRun: null, tables,
+  };
+}
+
+function countsOf(value: number): RunExportRowCounts {
+  return Object.fromEntries(RUN_EXPORT_TABLE_NAMES.map((name) => [name, value])) as RunExportRowCounts;
+}
+
+function runRecord(slug: string, title: string): RunRecord {
+  return { id: `run-${slug}`, slug, title, setting: '', status: 'binding', continuesRunId: null, register: '', createdAt: '2026-11-13T09:30:00Z' } as RunRecord;
+}
+
+test('a downloaded backup is named as the server names its backups and written as the command writes it', () => {
+  const document = aBackupOfTheMill();
+  const download = backupDownloadOf(document, new Date('2026-11-13T09:30:00.456Z'));
+  assert.equal(download.fileName, 'the-mill--20261113T093000Z.timeweft-run.json');
+  assert.equal(download.text, runExportDocumentAsText(document), 'the same backup taken from the page and by pnpm export-run is the same file');
+  assert.ok(download.text.endsWith('}\n'));
+  assert.deepEqual(JSON.parse(download.text), document);
+});
+
+test('a backup file is asked for, refused when empty and refused when over the restore limit', () => {
+  assert.equal(whyBackupFileCannotStart(null), 'Pick a backup file.');
+  assert.match(whyBackupFileCannotStart({ name: 'the-mill.timeweft-run.json', size: 0 }) ?? '', /is empty/);
+  assert.equal(whyBackupFileCannotStart({ name: 'the-mill.timeweft-run.json', size: LARGEST_RESTORE_BODY_BYTES }), null);
+  // A file a little over the limit may fit once its spacing is dropped, so it is read and measured.
+  assert.equal(whyBackupFileCannotStart({ name: 'the-mill.timeweft-run.json', size: LARGEST_RESTORE_BODY_BYTES + 10 * 1024 * 1024 }), null);
+  assert.equal(whyBackupFileCannotStart({ name: 'the-mill.timeweft-run.json', size: LARGEST_BACKUP_FILE_BYTES_READ }), null);
+  assert.match(whyBackupFileCannotStart({ name: 'big.json', size: LARGEST_BACKUP_FILE_BYTES_READ + 1 }) ?? '', /still be over 200 MB, which is the most a restore takes/);
+});
+
+test('a backup file over the limit on disk but under it as sent is sent', () => {
+  const document = aBackupOfTheMill();
+  // Rows of short fields, as many tables hold: their spacing is a large part of the file.
+  document.tables.scenes = Array.from({ length: 200 }, () => ({ ...(document.tables.scenes[0] ?? {}) })) as typeof document.tables.scenes;
+  const fileText = runExportDocumentAsText(document);
+  const sent = restoreToSend(fileText, false);
+  assert.ok(sent.ok);
+  assert.ok(bodyBytesOf(sent.input) < new TextEncoder().encode(fileText).length * 0.9, 'the body sent is smaller than the file');
+});
+
+test('a backup file is sent whole with the replace box as ticked', () => {
+  const document = aBackupOfTheMill();
+  const plain = restoreToSend(JSON.stringify(document, null, 2), false);
+  assert.ok(plain.ok);
+  assert.deepEqual(plain.input, { document, replace: false });
+  assert.equal(plain.runSlug, 'the-mill');
+  const replacing = restoreToSend(JSON.stringify(document), true);
+  assert.ok(replacing.ok);
+  assert.equal(replacing.input.replace, true);
+});
+
+test('a file that is not a backup is refused in the contract\'s words, and nothing is sent', () => {
+  const notJson = restoreToSend('{ "formatName": "timeweft-run-ex', false);
+  assert.equal(notJson.ok, false);
+  assert.match(notJson.ok ? '' : notJson.reason, /not readable as JSON.*Nothing was sent\./);
+
+  const otherKind = restoreToSend(JSON.stringify({ formatName: 'something-else', formatVersion: 1 }), false);
+  assert.match(otherKind.ok ? '' : otherKind.reason, /not a Timeweft backup of a run.*Nothing was sent\./);
+
+  const laterVersion = restoreToSend(JSON.stringify({ ...aBackupOfTheMill(), formatVersion: 99 }), false);
+  assert.match(laterVersion.ok ? '' : laterVersion.reason, /format version 99, and this server reads version 1 only/);
+
+  const cutShort = aBackupOfTheMill() as unknown as { tables: Record<string, unknown> };
+  delete cutShort.tables['collisions'];
+  const missing = restoreToSend(JSON.stringify(cutShort), false);
+  assert.match(missing.ok ? '' : missing.reason, /missing the list for collisions/);
+});
+
+test('a backup that would travel larger than the server takes is not sent, saying both figures', () => {
+  const document = aBackupOfTheMill();
+  // Quotes escape to two characters each, so this file is under the limit and its body is not.
+  const firstRun = document.tables.runs[0];
+  assert.ok(firstRun !== undefined);
+  firstRun.setting = '"'.repeat(Math.ceil(LARGEST_RESTORE_BODY_BYTES / 2) + 10);
+  const toSend = restoreToSend(JSON.stringify(document), false);
+  assert.equal(toSend.ok, false);
+  assert.match(toSend.ok ? '' : toSend.reason, /server takes at most 200 MB\. Nothing was sent\./);
+});
+
+test('the restore button and the replace sentence say what each does', () => {
+  assert.equal(restoreButtonText(false, false), 'Restore');
+  assert.equal(restoreButtonText(false, true), 'Restore, replacing the run already here');
+  assert.equal(restoreButtonText(true, false), 'Restoring…');
+  assert.equal(restoreButtonText(true, true), 'Replacing…');
+  assert.match(REPLACE_ON_RESTORE_SENTENCE, /left as it was/);
+});
+
+test('a restore is told in counts and in the order the tables are written, naming any run it replaced', () => {
+  const counts = runRowCountsInWords({ ...countsOf(0), scenes: 4, collisions: 2 });
+  assert.equal(counts.length, RUN_EXPORT_TABLE_NAMES.length);
+  assert.equal(counts[0]?.label, 'The run itself');
+  assert.deepEqual(counts.find((each) => each.label === 'Scenes, struck takes included')?.count, 4);
+  assert.deepEqual(counts.at(-1), { label: 'Collisions', count: 2 });
+  assert.equal(new Set(counts.map((each) => each.label)).size, counts.length);
+
+  const fresh: RestoredRunReport = { run: runRecord('the-mill', 'The Mill'), rowsRestored: countsOf(1), replaced: null };
+  assert.equal(restoredInWords(fresh), 'Restored The Mill (the-mill).');
+  const replacing: RestoredRunReport = { ...fresh, replaced: { run: runRecord('the-mill', 'The Old Mill'), rowsRemoved: countsOf(2) } };
+  assert.match(restoredInWords(replacing), /in place of The Old Mill \(the-mill\), which was removed/);
+});
+
+test('a size is said whole where it is whole, and to one place where it is not', () => {
+  assert.equal(megabytesInWords(200 * 1024 * 1024), '200 MB');
+  assert.equal(megabytesInWords(1.25 * 1024 * 1024), '1.3 MB');
 });

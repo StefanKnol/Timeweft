@@ -127,8 +127,8 @@ export function millerRun(): RunSnapshot {
     thread({ id: 'thread-struck', text: 'Can the lantern be found?', openedInSceneId: 'scene-2-struck', createdAt: momentAfter(2) }),
   ];
   const waypoints: WaypointRecord[] = [
-    { id: 'waypoint-fair', runId: 'run-demo', text: 'The autumn fair at the ford.', reachedInSceneId: null, createdAt: MOMENT },
-    { id: 'waypoint-reached', runId: 'run-demo', text: 'The ferry keeper is taken in.', reachedInSceneId: 'scene-3', createdAt: MOMENT },
+    { id: 'waypoint-fair', runId: 'run-demo', text: 'The autumn fair at the ford.', reachedInSceneId: null, withdrawnInSceneId: null, createdAt: MOMENT },
+    { id: 'waypoint-reached', runId: 'run-demo', text: 'The ferry keeper is taken in.', reachedInSceneId: 'scene-3', withdrawnInSceneId: null, createdAt: MOMENT },
   ];
   const legs: JourneyLegRecord[] = [
     leg({ id: 'leg-bank-market', fromPlace: 'the far bank', toPlace: 'the market town', duration: 'two days by cart',
@@ -144,6 +144,7 @@ export function millerRun(): RunSnapshot {
       status: 'binding', continuesRunId: null, register: 'Plain past tense. Close third person on the miller.', createdAt: MOMENT,
     },
     clocks, scenes, entries, facts, notes, rulings, threads, waypoints, legs, collisions: [],
+    runEdits: [], entryEdits: [], waypointRewordings: [],
   };
 }
 
@@ -276,7 +277,7 @@ export function generateRun(options: GeneratedRunOptions): RunSnapshot {
   }));
   const waypoints: WaypointRecord[] = Array.from({ length: options.waypoints }, (_, waypointIndex) => ({
     id: `waypoint-${waypointIndex}`, runId: 'run-gen', text: sentence(6),
-    reachedInSceneId: random() < 0.3 ? (anyStanding()?.id ?? null) : null, createdAt: momentAfter(waypointIndex),
+    reachedInSceneId: random() < 0.3 ? (anyStanding()?.id ?? null) : null, withdrawnInSceneId: null, createdAt: momentAfter(waypointIndex),
   }));
   const legs: JourneyLegRecord[] = Array.from({ length: options.legs ?? 0 }, (_, legIndex) => {
     const placeName = (): string => (entries.length > 0 && random() < 0.5 ? pick(entries).name : `the ${pick(WORDS)} road`);
@@ -294,6 +295,7 @@ export function generateRun(options: GeneratedRunOptions): RunSnapshot {
       status: random() < 0.5 ? 'binding' : 'telling', continuesRunId: null, register: paragraph(4), createdAt: MOMENT,
     },
     clocks, scenes, entries, facts, notes, rulings, threads, waypoints, legs, collisions: [],
+    runEdits: [], entryEdits: [], waypointRewordings: [],
   };
   const newest = standing[standing.length - 1];
   switch (options.hugeField) {
@@ -425,5 +427,6 @@ export function generateLongRun(options: { seed: number; scenes: number }): RunS
       status: 'binding', continuesRunId: null, register: paragraph(4), createdAt: MOMENT,
     },
     clocks, scenes, entries, facts, notes, rulings, threads, waypoints: [], legs, collisions: [],
+    runEdits: [], entryEdits: [], waypointRewordings: [],
   };
 }

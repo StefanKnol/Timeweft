@@ -1,7 +1,12 @@
-# Timeweft beside its own PostgreSQL. Copy this file, change the two secrets, and start it with
+# Timeweft beside its own PostgreSQL. Copy this file, change the three secrets, and start it with
 #   docker compose -f compose.yml up -d
 #
-# The database's volume is the only thing that holds the author's canon. Back that up.
+# The database's volume is the only thing that holds the author's canon. Back that up. The server
+# also writes a backup file of every run into ./backups (see "Backups of runs" in the README):
+# make that folder writable by the container's user, which is user id 1000:
+#   mkdir backups && sudo chown 1000:1000 backups && sudo chmod 700 backups
+# so nobody else on the host can read the canon it holds (each file is written readable by its
+# owner only), and copy it somewhere off this machine too.
 services:
   database:
     image: postgres:16
@@ -32,6 +37,16 @@ services:
       # TIMEWEFT_DATABASE_PORT is 5432 and TIMEWEFT_DATABASE_NAME is timeweft unless set.
       # Every request to /api and /mcp carries this. Make it long and random.
       TIMEWEFT_ACCESS_TOKEN: change-this-access-token
+      # A story chat connects to /mcp with this one, which opens nothing else, so the chat's
+      # connector never holds the token above. Long, random and different from it.
+      TIMEWEFT_STORY_TOKEN: change-this-story-token
+      # A backup of every run is written here a minute after start, then every 24 hours, keeping
+      # the newest 14 of each run. Leave TIMEWEFT_BACKUP_FOLDER out to switch this off.
+      TIMEWEFT_BACKUP_FOLDER: /backups
+      TIMEWEFT_BACKUP_EVERY_HOURS: "24"
+      TIMEWEFT_BACKUPS_TO_KEEP: "14"
+    volumes:
+      - ./backups:/backups
     ports:
       - "4400:4400"
 

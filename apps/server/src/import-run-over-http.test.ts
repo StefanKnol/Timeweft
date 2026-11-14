@@ -86,11 +86,13 @@ test('the command and the operation are one import: the command refuses five emp
   }
 });
 
-test('the body limit is the route\'s: 5 MB by default and 24 MB for import_run', () => {
+test('the body limit is the route\'s: 5 MB by default, 24 MB for import_run and 200 MB for restore_run', () => {
   assert.equal(largestBodyBytesFor('list_runs'), 5 * 1024 * 1024);
   assert.equal(LARGEST_BODY_BYTES, 5 * 1024 * 1024);
   assert.equal(largestBodyBytesFor('import_run'), 24 * 1024 * 1024);
-  assert.deepEqual(Object.keys(LARGEST_BODY_BYTES_BY_OPERATION), ['import_run']);
+  assert.equal(largestBodyBytesFor('restore_run'), 200 * 1024 * 1024);
+  assert.deepEqual(Object.keys(LARGEST_BODY_BYTES_BY_OPERATION), ['import_run', 'restore_run']);
+  assert.equal(bodyTooLargeSentence(200 * 1024 * 1024), 'The request body is larger than 200 MB, which is the most this route takes.');
   assert.equal(bodyTooLargeSentence(24 * 1024 * 1024), 'The request body is larger than 24 MB, which is the most this route takes.');
 });
 

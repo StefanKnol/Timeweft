@@ -5,7 +5,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { OPERATIONS, Refusal, type RunRecord, type SavedScene, type SceneInFull, type Store, type ThreadRecord } from '@timeweft/contract';
-import { importedRunInWords, runListingsInWords, savedSceneInWords, sceneInFullInWords, threadsInWords, type NamesInTheRun } from './in-words.ts';
+import {
+  ANSWER_IN_WORDS, endedFactInWords, entryWrittenInWords, importedRunInWords, runListingsInWords, savedSceneInWords, sceneInFullInWords,
+  threadsInWords, waypointInWords, withdrawnRulingInWords, type NamesInTheRun,
+} from './in-words.ts';
 import { runOperation } from './operations.ts';
 
 const SCENE_ID = '00000000-0000-4000-8000-000000000001';
@@ -116,4 +119,32 @@ test('a touch note with a line break stays on its thread\'s one line, as a brief
   const savedText = savedSceneInWords({ ...saved, threadsTouched: [touched] }, withOpening);
   assert.match(savedText, /Threads touched:\n- t: Who owes the miller\? \(moved: Half paid\. - 0000-fake: The weir is sold, open\)/);
   assert.doesNotMatch(savedText, /\n- 0000-fake/, 'the note broke out of its bullet');
+});
+
+test('the author\'s acts are said plainly: a waypoint by where it stands, an ended fact and a withdrawn ruling by their scene, an entry with its cautions', () => {
+  const waypoint = { id: 'w1', runId: 'run', text: 'The fair at the ford.', reachedInSceneId: null, withdrawnInSceneId: null, createdAt: '2026-01-01' };
+  assert.equal(waypointInWords(waypoint, names), 'Waypoint w1 (ahead): The fair at the ford.');
+  assert.equal(waypointInWords({ ...waypoint, reachedInSceneId: SCENE_ID }, names), 'Waypoint w1 (reached at scene 4): The fair at the ford.');
+  assert.equal(waypointInWords({ ...waypoint, reachedInSceneId: SCENE_ID, withdrawnInSceneId: SCENE_ID }, names),
+    'Waypoint w1 (withdrawn as of scene 4): The fair at the ford.', 'withdrawn outranks reached');
+
+  const fact = saved.factsWritten[0]!;
+  assert.equal(endedFactInWords({ ...fact, untilSceneId: SCENE_ID }, names),
+    'Ended: Odo the miller, where: at the weir, since scene 4, until scene 4. Nothing holds in its place, and the fact is kept as history.');
+
+  const ruling = {
+    id: 'r', runId: 'run', number: 3, text: 'Plain words.', source: 'author' as const, scope: 'run' as const, topics: [],
+    aboutEntryIds: [HIDDEN_ID], sceneId: null, withdrawnInSceneId: SCENE_ID, createdAt: '2026-01-01',
+  };
+  const said = withdrawnRulingInWords(ruling, names);
+  assert.match(said, /^Withdrawn as of scene 4, and no longer told to a story\. Ruling 3/);
+  assert.match(said, /Plain words\./);
+
+  const entry = {
+    id: 'e1', runId: 'run', kind: 'person' as const, name: 'Hild of the bakehouse', alsoKnownAs: ['Hild the baker'], pronoun: 'she',
+    introducedInSceneId: null, source: 'author' as const, visibility: 'author-only' as const, createdAt: '2026-01-01',
+  };
+  assert.equal(entryWrittenInWords('Renamed.', { entry, cautions: ['"Hild" also names another entry.'] }),
+    'Renamed. Hild of the bakehouse (person, she, author-only, also Hild the baker), id e1.\nCaution: "Hild" also names another entry.');
+  assert.match(ANSWER_IN_WORDS.set_entry_visibility({ entry, cautions: [] }, names), /^Turned author-only:/);
 });

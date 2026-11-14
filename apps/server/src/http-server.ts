@@ -10,7 +10,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { buildStampFromEnvironment } from './build-stamp.ts';
 import { OPERATION_ROUTE_PREFIX, Refusal, type OperationName, type Store, type WireAnswer } from '@timeweft/contract';
-import { carriesTheToken, type AccessSettings } from './access.ts';
+import { carriesATokenForStories, carriesTheToken, type AccessSettings } from './access.ts';
 import { serveMcpRequest } from './mcp.ts';
 import { isOperationName, runOperation } from './operations.ts';
 import { staticFileFor } from './static-files.ts';
@@ -20,11 +20,40 @@ export const LARGEST_BODY_BYTES = 5 * 1024 * 1024;
 
 /**
  * The routes that may carry more than the default, as the wire says. An import carries five
- * whole files, which a run kept by hand for a long while can make far larger than any scene.
+ * whole files, which a run kept by hand for a long while can make far larger than any scene. A
+ * restore carries a whole backup: every scene with every struck take, every fact with its
+ * history, and every change the author made, so it is given far more room than anything else.
+ * The body is held in memory while it is read, which is why there is a limit at all.
  */
 export const LARGEST_BODY_BYTES_BY_OPERATION: Partial<Record<OperationName, number>> = {
   import_run: 24 * 1024 * 1024,
+  restore_run: 200 * 1024 * 1024,
 };
+
+/**
+ * The most objects and lists a body may hold. Parsing turns every `{` and `[` into an object of its
+ * own, and the cost of that does not follow the body's size: 200 MB of rows of a backup parse into
+ * about 240 MB, while 200 MB written as `[{},{},...]` is 70 million objects and more than the
+ * process's whole memory, which ends the process rather than refusing the request. So the body is
+ * counted before it is parsed. A real backup holds one object per row and one list per table and
+ * per list column, a few hundred bytes apart, so 200 MB of one is well under a million; four
+ * million costs at most about 300 MB to parse.
+ */
+export const LARGEST_OBJECTS_AND_LISTS_PER_BODY = 4_000_000;
+
+/**
+ * How many objects and lists a JSON body could hold, as the count of its `{` and `[` bytes. A
+ * bracket inside a string is counted too, so this is never below the true count. In UTF-8 neither
+ * byte is ever part of a longer character, so the bytes can be counted without decoding.
+ */
+export function objectsAndListsAtMost(body: Buffer): number {
+  let count = 0;
+  for (let index = 0; index < body.length; index += 1) {
+    const byte = body[index];
+    if (byte === 0x7b || byte === 0x5b) count += 1;
+  }
+  return count;
+}
 
 /** The largest body one operation's route takes. */
 export function largestBodyBytesFor(name: OperationName): number {
@@ -48,6 +77,13 @@ class BodyTooLarge extends Error {
     this.largestBytes = largestBytes;
   }
 }
+
+/** Thrown before a body is parsed where it holds more objects and lists than any request needs. */
+class TooManyObjectsAndLists extends Error {}
+
+/** The sentence for a body that holds too many objects and lists to be parsed. */
+export const TOO_MANY_OBJECTS_AND_LISTS_SENTENCE =
+  `The request body holds more than ${LARGEST_OBJECTS_AND_LISTS_PER_BODY.toLocaleString('en')} objects and lists, far more than any backup or request needs, so it was not read and nothing was changed.`;
 
 /** The request's path, or null where its address cannot be read as a URL. */
 export function readRequestPath(request: IncomingMessage): string | null {
@@ -87,8 +123,12 @@ async function readBody(request: IncomingMessage, largestBytes: number): Promise
   return Buffer.concat(chunks);
 }
 
-/** The body as JSON. An empty body is an empty object, since several operations take nothing. */
+/**
+ * The body as JSON. An empty body is an empty object, since several operations take nothing. A
+ * body holding more objects and lists than any request needs is not parsed at all.
+ */
 function parseJsonBody(body: Buffer): { ok: true; value: unknown } | { ok: false } {
+  if (objectsAndListsAtMost(body) > LARGEST_OBJECTS_AND_LISTS_PER_BODY) throw new TooManyObjectsAndLists();
   const text = body.toString('utf8').trim();
   if (text === '') return { ok: true, value: {} };
   try {
@@ -180,7 +220,9 @@ async function handleRequest(settings: ServerSettings, request: IncomingMessage,
   const isApi = path === '/api' || path.startsWith('/api/');
   const isMcp = path === MCP_PATH || path.startsWith(`${MCP_PATH}/`);
   if (isApi || isMcp) {
-    if (!carriesTheToken(request.headers, settings)) {
+    // The story token, where one is set, opens /mcp and never the author's routes.
+    const letIn = isMcp ? carriesATokenForStories(request.headers, settings) : carriesTheToken(request.headers, settings);
+    if (!letIn) {
       response.setHeader('www-authenticate', 'Bearer');
       sendRefusal(response, 401, 'This server needs the access token, as "Authorization: Bearer <token>".');
       return;
@@ -204,6 +246,11 @@ async function handleWithNothingEscaping(settings: ServerSettings, request: Inco
   try {
     await handleRequest(settings, request, response);
   } catch (error) {
+    if (error instanceof TooManyObjectsAndLists) {
+      if (!response.headersSent) sendRefusal(response, 413, TOO_MANY_OBJECTS_AND_LISTS_SENTENCE);
+      else response.destroy();
+      return;
+    }
     if (error instanceof BodyTooLarge) {
       if (!response.headersSent) {
         response.setHeader('connection', 'close');

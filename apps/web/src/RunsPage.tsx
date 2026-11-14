@@ -1,6 +1,7 @@
 import { LoadedMessage, useOperation } from './calling.tsx';
 import { hashOfRoute } from './shaping.ts';
 import { ImportRunSection } from './ImportRunSection.tsx';
+import { RestoreRunSection } from './RestoreRunSection.tsx';
 
 export function RunsPage() {
   const { loaded, readAgain } = useOperation('list_runs', {});
@@ -42,6 +43,7 @@ export function RunsPage() {
         </ul>
       )}
       <ImportRunSection onImported={readAgain} />
+      <RestoreRunSection onRestored={readAgain} />
     </section>
   );
 }

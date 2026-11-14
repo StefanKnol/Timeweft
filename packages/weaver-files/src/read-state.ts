@@ -6,7 +6,7 @@ import type { ImportedRuling, ImportedRun } from '@timeweft/contract';
 import type { NameFinder } from './names-in-text.ts';
 import {
   bulletsOf, firstParentheticalSceneNumber, lastSceneNumberOfReference,
-  escapeForRegularExpression, leadingParenthetical, linesOf, presentOf, saysTheAuthorGaveIt, type NumberedLine,
+  escapeForRegularExpression, leadingParenthetical, linesOf, presentOf, saysTheAuthorGaveIt, topLevelParentheticals, type NumberedLine,
 } from './text-helpers.ts';
 
 /** A clock read out of the Clock section, with what it takes to read it off a scene's When line. */
@@ -34,11 +34,16 @@ export interface StateRead {
    * The present for the last scene: the Current situation section, or the Clock section's
    * "Current:" bullet where there is no such section, after the Clock section's lines that are
    * not bullets, less their sentences that carry a count on a kept clock. The Clock section's
-   * other bullets go to the setting, never here.
+   * other bullets are never read here: a note by the author among them is a ruling, in
+   * `clockNoteRulings`, and the rest is said in `unplaced`.
    */
   situation: string;
-  /** Standing lines about the run's world, such as "Universe age: ...", for the run's setting. */
-  settingLines: string[];
+  /**
+   * Notes the author gave in the Clock section ("Note (author, Scene 81): ..."), as rulings stated
+   * by the author, word for word. Kept apart from `rulings` so the caller appends them after the
+   * standing rulings and their numbering does not move.
+   */
+  clockNoteRulings: ImportedRuling[];
   register: string;
   rulings: ImportedRuling[];
   threads: ImportedRun['threads'];
@@ -127,7 +132,7 @@ export function sourceOfCoinedCanon(bulletText: string): 'author' | 'story' {
 
 export function readState(text: string, names: NameFinder): StateRead {
   const read: StateRead = {
-    clocks: [], situation: '', settingLines: [], register: '', rulings: [], threads: [], waypoints: [],
+    clocks: [], situation: '', clockNoteRulings: [], register: '', rulings: [], threads: [], waypoints: [],
     runStateLines: [], stackedHistoryBytes: 0, stackedHistoryLines: [], unplaced: [],
   };
   const { sections, before } = sectionsOf(text);
@@ -140,7 +145,7 @@ export function readState(text: string, names: NameFinder): StateRead {
   let currentSituation = '';
   for (const section of sections) {
     const heading = section.heading.toLowerCase();
-    if (/^clock/.test(heading)) clockRead = readClockSection(section, read);
+    if (/^clock/.test(heading)) clockRead = readClockSection(section, read, names);
     else if (/situation/.test(heading)) currentSituation = readSituationSection(section, read);
     else if (/ruling/.test(heading)) readRulingSection(section, read, names, 'run');
     else if (/canon/.test(heading)) readRulingSection(section, read, names, 'world');
@@ -199,12 +204,58 @@ function carriesAClockCount(sentence: string, namedPrefixes: string[][]): boolea
   return namedPrefixes.some((words) => new RegExp(`\\b${words.map(escapeForRegularExpression).join('\\s+')}\\s+Day\\s+\\d+(?!\\s*=)(?!\\d|\\.\\d)`, 'i').test(sentence));
 }
 
-/** Fewest words a remainder needs to stand as a line of its own. */
-const WORDS_A_LINE_NEEDS_TO_STAND = 4;
+/**
+ * The label a bullet or a sentence opens on and the text after it: everything up to the first colon
+ * that stands outside a parenthesis, so "Note (author, Scene 2: at the ford): ..." keeps its whole
+ * label. Emphasis around the label ("**Label**:", "**Label:**") is taken off. A label is at most
+ * sixty characters on one line; where no colon closes one, or a parenthesis opened before the
+ * colon never closes, there is no label.
+ */
+export function labelOpening(text: string): { label: string; rest: string } | null {
+  const opening = /^\*{0,2}/.exec(text)?.[0].length ?? 0;
+  let depth = 0;
+  for (let index = opening; index < text.length && index - opening <= 62; index += 1) {
+    const character = text[index];
+    if (character === '\n') return null;
+    if (character === '(') depth += 1;
+    if (character === ')' && depth > 0) depth -= 1;
+    if (character === ':' && depth === 0) {
+      const label = text.slice(opening, index).replace(/\*+$/, '').trim();
+      if (label === '' || label.length > 60) return null;
+      return { label, rest: text.slice(index + 1).replace(/^\*{0,2}\s*/, '') };
+    }
+  }
+  return null;
+}
 
-/** Whether what is left of a line is too little to say anything on its own: fewer than four words. */
-function isAFragment(text: string): boolean {
-  return (text.match(/\p{L}[\p{L}\p{N}'’-]*/gu) ?? []).length < WORDS_A_LINE_NEEDS_TO_STAND;
+/**
+ * Whether a label is a note the author gave: outside its parentheses it is a short name ending on
+ * "note" ("Note", "Author's note"), and it says the author gave it, as "Note (author, Scene 81)"
+ * does. "Note for the author" is not one, and nor is a sentence that only mentions the author's
+ * note ("the run is at day +9 (see the author's note").
+ */
+export function labelIsAnAuthorNote(label: string): boolean {
+  const outside = topLevelParentheticals(label).without;
+  return /^(?:[\p{L}'\u2019-]+\s+){0,2}note$/iu.test(outside) && saysTheAuthorGaveIt(label);
+}
+
+/** Whether a sentence opens on an author's note label, "Note (author, Scene 81): ...". */
+function opensOnAnAuthorNote(sentence: string): boolean {
+  const opening = labelOpening(sentence.trim());
+  return opening !== null && labelIsAnAuthorNote(opening.label);
+}
+
+/** A note by the author in the Clock section, as a ruling stated by the author, word for word. */
+function clockNoteRuling(text: string, names: NameFinder): ImportedRuling {
+  const label = labelOpening(text)?.label ?? text;
+  return {
+    text,
+    source: 'author',
+    scope: 'run',
+    topics: ['time', ...topicsOf(text).filter((topic) => topic !== 'time')],
+    about: names.namesMentionedIn(text),
+    scene: firstParentheticalSceneNumber(label),
+  };
 }
 
 /**
@@ -217,27 +268,28 @@ function isAFragment(text: string): boolean {
  *   "(stopped)" after its description) and less any sentence that describes the days-after
  *   reckoning, which goes to that clock's description instead.
  * - "Run began:" (or "Began:", "Run start:") is day +0 of the days-after reckoning: that clock
- *   counts from it. Where the section writes no "day +N" there is no such clock, and the line
- *   goes to the run's setting instead.
+ *   counts from it. Where the section writes no "day +N" there is no such clock, and the line is
+ *   said in `unplaced`: it is the zero of nothing.
  * - A line that is not a bullet is part of the present, less its sentences that carry a count on
  *   a kept clock, which are left out and said once in `unplaced` as below.
- * - Any other bullet is a standing line about the run. Its sentences that carry a count on a kept
- *   clock ("seventy days since the eve, day +70") were true when written and are left out, said
- *   once in `unplaced`, since the scenes' readings carry the clocks and an old count beside them
- *   contradicts the present. The rest of it goes to the run's setting, where it does not age. A
- *   bullet that lost a sentence loses its label too, since the label named what the count said;
- *   where what is left is only a fragment (fewer than four words) it is said in `unplaced` instead.
+ * - Any other bullet is a leftover, and never the run's setting, which is where and when the run is
+ *   set in the author's words and comes only from what the caller gives. A note by the author in
+ *   it (a label such as "Note (author, Scene 81)", the bullet's own or opening one of its
+ *   sentences) is a ruling stated by the author, word for word from that label to the bullet's
+ *   end, topic time. The rest of a leftover goes to `unplaced` with its reason; its sentences that
+ *   carry a count on a kept clock ("seventy days since the eve, day +70") are said apart, since
+ *   the scenes' readings carry the clocks and an old count beside them contradicts the present.
  */
-function readClockSection(section: Section, read: StateRead): ClockSectionRead {
+function readClockSection(section: Section, read: StateRead, names: NameFinder): ClockSectionRead {
   const { bullets, strays } = bulletsOf(section.lines);
   const sectionRead: ClockSectionRead = { current: null, situationLines: [] };
   const relativeSentences: string[] = [];
-  let runBegan: { label: string; value: string } | null = null;
-  const otherBullets: Array<{ label: string; value: string; lineNumber: number }> = [];
+  let runBegan: { label: string; value: string; lineNumber: number } | null = null;
+  const otherBullets: Array<{ label: string; value: string; text: string; lineNumber: number }> = [];
   for (const bullet of bullets) {
-    const match = /^\*{0,2}([^:\n]{1,60}?)\*{0,2}:\*{0,2}\s*([\s\S]*)$/.exec(bullet.text);
-    const label = (match?.[1] ?? '').trim();
-    const value = (match?.[2] ?? bullet.text).trim();
+    const match = labelOpening(bullet.text);
+    const label = match?.label ?? '';
+    const value = (match?.rest ?? bullet.text).trim();
     if (/^current$/i.test(label)) {
       const { present, stackedBytes } = presentOf(value);
       if (stackedBytes > 0) {
@@ -268,10 +320,10 @@ function readClockSection(section: Section, read: StateRead): ClockSectionRead {
       continue;
     }
     if (match && /^(?:run\s+)?(?:began|begins|start|started|starts)$/i.test(label)) {
-      runBegan = { label, value: value.replace(/[.;]+$/, '').trim() };
+      runBegan = { label, value: value.replace(/[.;]+$/, '').trim(), lineNumber: bullet.lineNumber };
       continue;
     }
-    otherBullets.push({ label: match ? label : '', value: match ? value : bullet.text.trim(), lineNumber: bullet.lineNumber });
+    otherBullets.push({ label: match ? label : '', value: match ? value : bullet.text.trim(), text: bullet.text.trim(), lineNumber: bullet.lineNumber });
   }
   const namedPrefixes = read.clocks.filter((clock) => clock.form === 'named').map((clock) => clock.prefixWords);
   // A line that is not a bullet is read as part of the present, and like the other bullets it
@@ -285,30 +337,25 @@ function readClockSection(section: Section, read: StateRead): ClockSectionRead {
     if (kept.length > 0) sectionRead.situationLines.push(kept.join(' '));
   }
   for (const other of otherBullets) {
-    const sentences = sentencesOf(other.value);
-    const kept = sentences.filter((sentence) => !carriesAClockCount(sentence, namedPrefixes));
-    if (kept.length < sentences.length) {
-      read.unplaced.push(`state.md line ${other.lineNumber}: ${sentences.length - kept.length === 1 ? 'a sentence' : `${sentences.length - kept.length} sentences`} of the Clock section's ${other.label === '' ? 'line' : `"${other.label}" line`} that carry a count on a kept clock were left out of the run, since the scenes' readings carry the clocks and a count written once does not move with them.`);
+    const named = other.label === '' ? 'line' : `"${other.label}" line`;
+    // Where the bullet's own label is the author's note, all of it is the ruling; else a sentence
+    // opening on such a label begins one, which runs to the bullet's end.
+    const sentences = labelIsAnAuthorNote(other.label) ? [] : sentencesOf(other.value);
+    const noteStart = labelIsAnAuthorNote(other.label) ? 0 : sentences.findIndex(opensOnAnAuthorNote);
+    const before = noteStart === -1 ? sentences : sentences.slice(0, noteStart);
+    if (labelIsAnAuthorNote(other.label)) read.clockNoteRulings.push(clockNoteRuling(other.text, names));
+    else if (noteStart !== -1) read.clockNoteRulings.push(clockNoteRuling(sentences.slice(noteStart).join(' '), names));
+    const kept = before.filter((sentence) => !carriesAClockCount(sentence, namedPrefixes));
+    if (kept.length < before.length) {
+      read.unplaced.push(`state.md line ${other.lineNumber}: ${before.length - kept.length === 1 ? 'a sentence' : `${before.length - kept.length} sentences`} of the Clock section's ${named} that carry a count on a kept clock were left out of the run, since the scenes' readings carry the clocks and a count written once does not move with them.`);
     }
     if (kept.length === 0) continue;
-    const keptText = kept.join(' ');
-    if (kept.length === sentences.length) {
-      read.settingLines.push(other.label === '' ? keptText : `${other.label}: ${keptText}`);
-      continue;
-    }
-    // The label named what the removed count said ("Elapsed in run: ..."), so it no longer describes
-    // what is left. The rest is kept under no label, or, where it is only a fragment, said once in
-    // `unplaced` rather than set down as a line about the run that reads as nothing.
-    if (isAFragment(keptText)) {
-      read.unplaced.push(`state.md line ${other.lineNumber}: what was left of the Clock section's ${other.label === '' ? 'line' : `"${other.label}" line`} once its counts were left out was only a fragment, so it was left out of the run too.`);
-      continue;
-    }
-    read.settingLines.push(keptText);
+    read.unplaced.push(`state.md line ${other.lineNumber}: ${kept.length < before.length ? 'the rest of ' : ''}the Clock section's ${named} is neither the present, a clock, the zero of the days-after clock nor a note by the author, so it was not carried: the store holds what is so, and the run's setting is only what is given for it.`);
   }
   const relativeClockMade = addRelativeClock(section, read, runBegan?.value ?? null, relativeSentences);
-  // With no "day +N" anywhere there is no days-after clock to count from the run's start, so the
-  // start is kept as a standing line about the run rather than dropped.
-  if (!relativeClockMade && runBegan !== null && runBegan.value !== '') read.settingLines.push(`${runBegan.label}: ${runBegan.value}`);
+  if (!relativeClockMade && runBegan !== null && runBegan.value !== '') {
+    read.unplaced.push(`state.md line ${runBegan.lineNumber}: the Clock section's "${runBegan.label}" line was not carried, since no "day +N" counts from it, and the run's setting is only what is given for it.`);
+  }
   return sectionRead;
 }
 
@@ -537,11 +584,75 @@ export function closureOfThread(bulletText: string): string | null {
   return null;
 }
 
+/** What may stand between the bracketed notes of a waypoint bullet without saying anything. */
+const WAYPOINT_FILLER = /[\s.;:,!?\-\u2013\u2014\u2026]/g;
+
+/**
+ * The bracketed groups a text is made of, round or square, in order, or null where any text
+ * other than punctuation stands outside them or a bracket never closes.
+ */
+function bracketedGroupsOnly(text: string): string[] | null {
+  const groups: string[] = [];
+  let outside = '';
+  let depth = 0;
+  let inner = '';
+  for (const character of text) {
+    if (character === '(' || character === '[') {
+      if (depth > 0) inner += character;
+      depth += 1;
+      continue;
+    }
+    if ((character === ')' || character === ']') && depth > 0) {
+      depth -= 1;
+      if (depth === 0) {
+        groups.push(inner.trim());
+        inner = '';
+      } else {
+        inner += character;
+      }
+      continue;
+    }
+    if (depth > 0) inner += character;
+    else outside += character;
+  }
+  if (depth > 0 || outside.replace(WAYPOINT_FILLER, '') !== '') return null;
+  return groups;
+}
+
+/** Whether a bracketed note says the waypoint is held or kept by the author, out of the files. */
+function saysTheWaypointIsHeldOutsideTheFiles(note: string): boolean {
+  return /\b(?:held|kept|hidden|reserved)\b/i.test(note)
+    && /\b(?:author|narration|narrative|elsewhere|outside|off[- ]page|files?)\b/i.test(note);
+}
+
+/**
+ * Whether a waypoint bullet states no scene to reach. With emphasis taken off, and past a short
+ * label such as "Waypoint 1:", it is empty, or it is made only of bracketed notes, round or square,
+ * with nothing else but punctuation between them, at least one of which says the waypoint is held
+ * outside the files ("(held author-side; kept out of narration)", "(kept elsewhere)") and none of
+ * which reads as a sentence of its own. A waypoint written wholly as an aside ("(The miller meets
+ * the baker at the ford.)") states its scene and is a waypoint, and so is a bullet that opens on a
+ * parenthetical and then says the scene ("(Author, Scene 9) Reach the ford").
+ */
+export function statesNoSceneToReach(bulletText: string): boolean {
+  let plain = withoutEmphasis(bulletText);
+  if (plain.replace(WAYPOINT_FILLER, '') === '') return true;
+  const opening = labelOpening(plain);
+  if (opening !== null && opening.label.length <= 30 && !/[()[\]]/.test(opening.label)) plain = opening.rest;
+  const groups = bracketedGroupsOnly(plain);
+  if (groups === null || !groups.some(saysTheWaypointIsHeldOutsideTheFiles)) return false;
+  return groups.every((group) => saysTheWaypointIsHeldOutsideTheFiles(group) || !/[.!?"\u201d]$/.test(group));
+}
+
 function readWaypointSection(section: Section, read: StateRead): void {
   const { bullets, strays } = bulletsOf(section.lines);
   for (const stray of strays) read.unplaced.push(`state.md line ${stray.lineNumber}: a line among the waypoints that is not a bullet.`);
   for (const bullet of bullets) {
     const text = bullet.text.trim();
+    if (statesNoSceneToReach(text)) {
+      read.unplaced.push(`state.md line ${bullet.lineNumber}: a waypoint bullet that states no scene to reach, only a note that the waypoint is held outside the files, was not carried: the files do not say the scene, so the author keeps that waypoint where they hold it.`);
+      continue;
+    }
     // Reached where the bullet says so at its start, crosses itself out, or says anywhere that it
     // was played, reached or done in a scene ("Played Scene 12", "(reached Scene 30)", "done in
     // Scene 40"). The scene number is what keeps "has played the fiddle before" from counting.

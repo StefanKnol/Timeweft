@@ -8,6 +8,8 @@ import { ThreadsSection } from './ThreadsSection.tsx';
 import { CollisionsSection } from './CollisionsSection.tsx';
 import { BriefingSection } from './BriefingSection.tsx';
 import { JourneysSection } from './JourneysSection.tsx';
+import { RunDetailsEditor } from './RunDetailsEditor.tsx';
+import { BackupDownload } from './BackupDownload.tsx';
 
 const SECTION_TITLES: Record<RunSection, string> = {
   scenes: 'Scenes',
@@ -33,7 +35,7 @@ export function RunPage({ route }: { route: RunRoute }) {
         </>
       ) : (
         <>
-          <RunHeading snapshot={loaded.answer} />
+          <RunHeading snapshot={loaded.answer} readAgain={readAgain} />
           <SectionTabs route={route} snapshot={loaded.answer} />
           <SectionBody route={route} snapshot={loaded.answer} readAgain={readAgain} />
         </>
@@ -42,7 +44,7 @@ export function RunPage({ route }: { route: RunRoute }) {
   );
 }
 
-function RunHeading({ snapshot }: { snapshot: RunSnapshot }) {
+function RunHeading({ snapshot, readAgain }: { snapshot: RunSnapshot; readAgain: () => void }) {
   const { run } = snapshot;
   return (
     <header>
@@ -52,6 +54,9 @@ function RunHeading({ snapshot }: { snapshot: RunSnapshot }) {
       {snapshot.clocks.length > 0 && (
         <p className="quiet">Clocks: {snapshot.clocks.map((clock) => `${clock.name}${clock.countsFrom === '' ? '' : ` (from ${clock.countsFrom})`}`).join('; ')}</p>
       )}
+      {run.register !== '' && <p className="quiet">Narrated: {run.register}</p>}
+      <RunDetailsEditor snapshot={snapshot} readAgain={readAgain} />
+      <BackupDownload runSlug={run.slug} />
     </header>
   );
 }
@@ -83,13 +88,13 @@ function SectionBody({ route, snapshot, readAgain }: { route: RunRoute; snapshot
     case 'scenes':
       return <section>{heading}<ScenesSection snapshot={snapshot} selectedSceneId={route.itemId} /></section>;
     case 'entries':
-      return <section>{heading}<EntriesSection snapshot={snapshot} openEntryId={route.itemId} /></section>;
+      return <section>{heading}<EntriesSection snapshot={snapshot} openEntryId={route.itemId} readAgain={readAgain} /></section>;
     case 'rulings':
-      return <section>{heading}<RulingsSection snapshot={snapshot} /></section>;
+      return <section>{heading}<RulingsSection snapshot={snapshot} readAgain={readAgain} /></section>;
     case 'threads':
-      return <section>{heading}<ThreadsSection snapshot={snapshot} /></section>;
+      return <section>{heading}<ThreadsSection snapshot={snapshot} readAgain={readAgain} /></section>;
     case 'journeys':
-      return <section>{heading}<JourneysSection snapshot={snapshot} /></section>;
+      return <section>{heading}<JourneysSection snapshot={snapshot} readAgain={readAgain} /></section>;
     case 'collisions':
       return <section>{heading}<CollisionsSection snapshot={snapshot} readAgain={readAgain} /></section>;
     case 'briefing':

@@ -3,13 +3,14 @@
  */
 import type { Selectable } from 'kysely';
 import type {
-  ClockReading, ClockRecord, CollisionRecord, CollisionState, EntryKind, EntryNoteRecord,
-  EntryRecord, FactRecord, JourneyLegRecord, RulingRecord, RulingScope, RunRecord, RunStatus,
-  SceneRecord, SceneStatus, Source, ThreadRecord, Visibility, WaypointRecord,
+  ClockReading, ClockRecord, CollisionRecord, CollisionState, EntryEditRecord, EntryFieldTheAuthorEdits,
+  EntryKind, EntryNoteRecord, EntryRecord, FactRecord, JourneyLegRecord, RulingRecord, RulingScope,
+  RunEditRecord, RunFieldTheAuthorEdits, RunRecord, RunStatus, SceneRecord, SceneStatus, Source,
+  ThreadRecord, Visibility, WaypointRecord, WaypointRewordingRecord,
 } from '@timeweft/contract';
 import type {
-  ClocksTable, CollisionsTable, EntriesTable, EntryNotesTable, FactsTable, JourneyLegsTable,
-  RulingsTable, RunsTable, ScenesTable, ThreadsTable, WaypointsTable,
+  ClocksTable, CollisionsTable, EntriesTable, EntryEditsTable, EntryNotesTable, FactsTable, JourneyLegsTable,
+  RulingsTable, RunEditsTable, RunsTable, ScenesTable, ThreadsTable, WaypointRewordingsTable, WaypointsTable,
 } from './database.ts';
 
 export type RunRow = Selectable<RunsTable>;
@@ -119,6 +120,28 @@ export function threadFromRow(row: ThreadRow, aboutEntryIds: string[], touches: 
 export function waypointFromRow(row: Selectable<WaypointsTable>): WaypointRecord {
   return {
     id: row.id, runId: row.run_id, text: row.text, reachedInSceneId: row.reached_in_scene_id,
+    withdrawnInSceneId: row.withdrawn_in_scene_id, createdAt: asText(row.created_at),
+  };
+}
+
+export function waypointRewordingFromRow(row: Selectable<WaypointRewordingsTable>): WaypointRewordingRecord {
+  return {
+    id: row.id, runId: row.run_id, waypointId: row.waypoint_id, earlierText: row.earlier_text,
+    laterText: row.later_text, afterSceneId: row.after_scene_id, createdAt: asText(row.created_at),
+  };
+}
+
+export function runEditFromRow(row: Selectable<RunEditsTable>): RunEditRecord {
+  return {
+    id: row.id, runId: row.run_id, field: row.field as RunFieldTheAuthorEdits, earlierValue: row.earlier_value,
+    laterValue: row.later_value, afterSceneId: row.after_scene_id, createdAt: asText(row.created_at),
+  };
+}
+
+export function entryEditFromRow(row: Selectable<EntryEditsTable>): EntryEditRecord {
+  return {
+    id: row.id, runId: row.run_id, entryId: row.entry_id, field: row.field as EntryFieldTheAuthorEdits,
+    earlierValue: row.earlier_value, laterValue: row.later_value, afterSceneId: row.after_scene_id,
     createdAt: asText(row.created_at),
   };
 }

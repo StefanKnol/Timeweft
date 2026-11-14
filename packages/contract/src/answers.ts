@@ -7,10 +7,11 @@
  */
 import type { InputOf } from './operations.ts';
 import type {
-  ClockRecord, CollisionRecord, EntryKind, EntryNoteRecord, EntryRecord, FactRecord, Id,
-  JourneyLegRecord, RulingRecord, RulingScope, RunRecord, RunSnapshot, RunStatus, SceneRecord,
-  Source, ThreadRecord, Visibility, WaypointRecord,
+  ClockRecord, CollisionRecord, EntryEditRecord, EntryKind, EntryNoteRecord, EntryRecord, FactRecord, Id,
+  JourneyLegRecord, RulingRecord, RulingScope, RunEditRecord, RunRecord, RunSnapshot, RunStatus, SceneRecord,
+  Source, ThreadRecord, Visibility, WaypointRecord, WaypointRewordingRecord,
 } from './records.ts';
+import type { RestoredRunReport, RunExportDocument } from './run-export.ts';
 
 /** A refusal the caller can act on. Never thrown for a programming fault. */
 export class Refusal extends Error {
@@ -77,6 +78,16 @@ export interface EntryLookup {
   rulings: RulingRecord[];
 }
 
+/**
+ * What an author's write to an entry answers with: the entry as it now stands, and anything the
+ * author should know, in sentences. A name that now answers to two entries is said here, since a
+ * story naming it will be refused until one of them is renamed.
+ */
+export interface EntryWritten {
+  entry: EntryRecord;
+  cautions: string[];
+}
+
 export interface FoundItem {
   kind: 'entry' | 'fact' | 'note' | 'scene' | 'ruling' | 'thread';
   /** What to show: a line of text holding the match. */
@@ -106,8 +117,54 @@ export interface Store {
   saveScene(input: InputOf<'save_scene'>): Promise<SavedScene>;
   redoScene(input: InputOf<'redo_scene'>): Promise<SavedScene>;
   recordRuling(input: InputOf<'record_ruling'>): Promise<RulingRecord>;
+  /**
+   * States a fact in the author's name. The entry is named by `entryId` or by `entry`, exactly one;
+   * what it points at by `aboutEntryId` or by `about`, at most one; anything else is refused.
+   */
   stateFact(input: InputOf<'state_fact'>): Promise<FactRecord>;
   settleCollision(input: InputOf<'settle_collision'>): Promise<CollisionRecord>;
+
+  /*
+   * The author's hand. Every door below is the author's alone and is dated by one rule, set down in
+   * docs/decisions/0003-the-authors-hand.md: an act made outside a scene is dated to the newest
+   * standing scene of its run when it is made, and no scene's save is recorded as having done it, so
+   * a redo of that scene carries the act onto the new take and never takes it back. Where the run has
+   * no standing scene, what starts is dated to no scene, and what has to stop at a scene is refused.
+   * Nothing here deletes a row or writes over a value without keeping what it held, and a redo
+   * leaves what the author did as the author left it: an entry's edited fields, a touch, a closing.
+   */
+
+  /** Closes an open fact as of the newest standing scene, with nothing in its place. */
+  endFact(input: InputOf<'end_fact'>): Promise<FactRecord>;
+  /** Withdraws a ruling as of the newest standing scene. The ruling is kept word for word. */
+  withdrawRuling(input: InputOf<'withdraw_ruling'>): Promise<RulingRecord>;
+
+  addWaypoint(input: InputOf<'add_waypoint'>): Promise<WaypointRecord>;
+  /** Gives a waypoint new words under the same id, keeping the earlier words as a rewording. */
+  rewordWaypoint(input: InputOf<'reword_waypoint'>): Promise<WaypointRecord>;
+  /** Marks a waypoint reached at the standing scene the author names, which no redo takes back. */
+  markWaypointReached(input: InputOf<'mark_waypoint_reached'>): Promise<WaypointRecord>;
+  /** Withdraws a waypoint as of the newest standing scene. It is kept, and never served to a story. */
+  withdrawWaypoint(input: InputOf<'withdraw_waypoint'>): Promise<WaypointRecord>;
+
+  /** Changes what is given of a run's title, setting, register and status, keeping each earlier value. */
+  editRun(input: InputOf<'edit_run'>): Promise<RunRecord>;
+
+  /** Opens a thread as of the newest standing scene, or of no scene where the run has none. */
+  openThread(input: InputOf<'open_thread'>): Promise<ThreadRecord>;
+  /** Touches an open thread at the newest standing scene. */
+  touchThread(input: InputOf<'touch_thread'>): Promise<ThreadRecord>;
+  /** Closes an open thread as of the newest standing scene, with how it resolved. */
+  closeThread(input: InputOf<'close_thread'>): Promise<ThreadRecord>;
+
+  /** Adds an entry in the author's name, introduced by no scene. */
+  addEntry(input: InputOf<'add_entry'>): Promise<EntryWritten>;
+  /** Changes what is given of an entry's kind, other names and pronoun, keeping each earlier value. */
+  editEntry(input: InputOf<'edit_entry'>): Promise<EntryWritten>;
+  /** Renames an entry. The old name joins its other names, and both changes are kept. */
+  renameEntry(input: InputOf<'rename_entry'>): Promise<EntryWritten>;
+  /** Turns an entry open or author-only. Only the entry's row changes, and the change is kept. */
+  setEntryVisibility(input: InputOf<'set_entry_visibility'>): Promise<EntryWritten>;
 
   /** Write a whole run read from files, in one transaction. Refuses a slug already there with `RunAlreadyExists`. */
   importRun(run: ImportedRun): Promise<RunSnapshot>;
@@ -119,6 +176,32 @@ export interface Store {
    * has the slug, the files are imported as `importRun` would and nothing is removed.
    */
   replaceImportedRun(run: ImportedRun): Promise<ReplacedImport>;
+
+  /*
+   * Backups, set down in docs/decisions/0004-export-and-restore.md. Both are the author's alone and
+   * never reached by a story. Rows travel as the store keeps them, never through a record.
+   */
+
+  /**
+   * Every row the run holds, in every table that holds a run's rows, as one document, read inside one
+   * transaction so it is of one moment. Refuses a slug the store lacks.
+   */
+  exportRun(runSlug: string): Promise<RunExportDocument>;
+  /**
+   * Writes a document's rows back exactly as they are, ids, order written, write marks and times
+   * kept, in one transaction, and then moves the store's sequences past the highest values written so
+   * later writes sort after them. The document's outside has been read by `readRunExportDocument`;
+   * the store checks every row against its own columns and refuses a table or a column it does not
+   * know or a column it lacks, naming it.
+   *
+   * Refused, changing nothing: a run with the document's id or slug already there, unless `replace`;
+   * with `replace`, the id and the slug held by two different runs, or another run continuing from
+   * the run to be removed where the document is a different run (another id); the run the document
+   * continues from missing, named by its slug; a row whose id another run already holds.
+   * With `replace`, the run in the way is deleted whole (every run table cascades from it) inside the
+   * same transaction, before the rows are written.
+   */
+  restoreRun(document: RunExportDocument, options: { replace: boolean }): Promise<RestoredRunReport>;
 }
 
 /** How much a run holds, kind by kind. */
@@ -251,6 +334,7 @@ export interface WeaverFiles {
 }
 
 export type {
-  ClockRecord, CollisionRecord, EntryNoteRecord, EntryRecord, FactRecord, Id, JourneyLegRecord,
-  RulingRecord, RunRecord, RunSnapshot, SceneRecord, ThreadRecord, WaypointRecord,
+  ClockRecord, CollisionRecord, EntryEditRecord, EntryNoteRecord, EntryRecord, FactRecord, Id, JourneyLegRecord,
+  RulingRecord, RunEditRecord, RunRecord, RunSnapshot, SceneRecord, ThreadRecord, WaypointRecord,
+  WaypointRewordingRecord,
 };

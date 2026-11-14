@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import { Refusal } from '@timeweft/contract';
-import { millerRun } from './demo-run.ts';
+import { millerRun, ruling } from './demo-run.ts';
 import {
   factsHoldingFor, findInRun, lookUpEntry, resolveEntryByName, rulingsBearingOn, sceneInFull, standingScenesOf,
   threadsOpenFor,
@@ -191,6 +191,14 @@ describe('sceneInFull', () => {
     );
     const full = sceneInFull(run, 3);
     assert.deepEqual(full.entriesIntroduced.map((entry) => entry.name).slice(-2), ['the weir', 'the baker']);
+  });
+
+  it('leaves out a ruling given at the scene and withdrawn since', () => {
+    const run = millerRun();
+    run.rulings.push(ruling({ id: 'ruling-given-then-withdrawn', number: 5, text: 'Keep the mill wheel turning.', sceneId: 'scene-3', withdrawnInSceneId: 'scene-3' }));
+    run.rulings.push(ruling({ id: 'ruling-given-here', number: 6, text: 'Say the loft is cold.', sceneId: 'scene-3' }));
+    const full = sceneInFull(run, 3);
+    assert.deepEqual(full.rulings.map((item) => item.id), ['ruling-given-here']);
   });
 
   it('answers the standing take where a struck take shares the number', () => {

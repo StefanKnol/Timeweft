@@ -5,10 +5,13 @@
  * browser, is what lets `node --test` hold it: a rule about which fact holds or which take is
  * struck is tested once, not looked at in a screenshot.
  */
-import { ENTRY_KINDS, OPERATION_ROUTE_PREFIX, OPERATIONS, isRunAlreadyExistsSentence } from '@timeweft/contract';
+import {
+  ENTRY_KINDS, OPERATION_ROUTE_PREFIX, OPERATIONS, RUN_EXPORT_TABLE_IN_WORDS, RUN_EXPORT_TABLE_NAMES, Refusal, backupFileName, isRunAlreadyExistsSentence,
+  readRunExportDocument, runExportDocumentAsText,
+} from '@timeweft/contract';
 import type {
   ClockReading, ClockRecord, CollisionRecord, EntryKind, EntryNoteRecord, EntryRecord, FactRecord,
-  Id, ImportedRunReport, JourneyLegRecord, RequestOf, RulingRecord, RunSnapshot, RunStatus, SceneRecord, ThreadRecord, Visibility, WaypointRecord, WireAnswer,
+  EntryEditRecord, Id, ImportedRunReport, RestoredRunReport, RunExportDocument, RunExportRowCounts, RunExportTableName, JourneyLegRecord, RequestOf, RulingRecord, RulingScope, RunEditRecord, RunSnapshot, RunStatus, SceneRecord, ThreadRecord, Visibility, WaypointRecord, WireAnswer,
 } from '@timeweft/contract';
 
 // ---------------------------------------------------------------------------------------------
@@ -256,6 +259,15 @@ export function rulingsMatching(rulings: RulingRecord[], filterText: string): Ru
     .sort((first, second) => first.number - second.number);
 }
 
+/** A waypoint moved to another list by the author: marked reached at a scene, or withdrawn. */
+export type WaypointMove = { kind: 'reached'; text: string; sceneNumber: number } | { kind: 'withdrawn'; text: string };
+
+/** What the page says after a waypoint moved, naming it and the list it went to. */
+export function waypointMoveInWords(move: WaypointMove): string {
+  if (move.kind === 'reached') return `\u201c${move.text}\u201d is marked reached at scene ${move.sceneNumber}. It is kept under Waypoints reached below.`;
+  return `\u201c${move.text}\u201d is withdrawn. It is kept among the waypoints withdrawn below, with what it said.`;
+}
+
 /** A thread with the scene numbers it opened at, was last touched at and closed at. */
 export interface ThreadAsDrawn {
   thread: ThreadRecord;
@@ -264,7 +276,19 @@ export interface ThreadAsDrawn {
   lastTouchedInSceneNumber: number | null;
   /** What moved in that scene, where its touch said. */
   lastTouchNote: string;
+  /**
+   * The newest touch the thread holds, with what it said, or null where it was never touched.
+   * Read off the touches themselves, so a touch at the scene the thread opened in is still drawn.
+   */
+  lastTouch: { sceneNumber: number | null; note: string } | null;
   closedInSceneNumber: number | null;
+}
+
+/** The newest touch of a thread in words, for its card: '' where it was never touched. */
+export function threadLastTouchInWords(item: ThreadAsDrawn): string {
+  if (item.lastTouch === null) return '';
+  const where = item.lastTouch.sceneNumber === null ? 'Last touched' : `Last touched at scene ${item.lastTouch.sceneNumber}`;
+  return item.lastTouch.note === '' ? `${where}.` : `${where}: ${item.lastTouch.note}`;
 }
 
 /**
@@ -272,6 +296,16 @@ export interface ThreadAsDrawn {
  * first, by the scene it was last touched in, then the scene it opened in, the newest first, then
  * the latest written. An unknown scene ranks after every known one at its step.
  */
+function newestTouchOf(thread: ThreadRecord, numberOf: (sceneId: string | null) => number | null): ThreadAsDrawn['lastTouch'] {
+  let newest: ThreadAsDrawn['lastTouch'] = null;
+  for (const touch of thread.touches) {
+    const sceneNumber = numberOf(touch.sceneId);
+    // The later touch wins a tie, since touches are kept in the order they were made.
+    if (newest === null || (sceneNumber ?? -1) >= (newest.sceneNumber ?? -1)) newest = { sceneNumber, note: touch.note };
+  }
+  return newest;
+}
+
 export function threadsOpenFirst(threads: ThreadRecord[], scenes: SceneRecord[]): { open: ThreadAsDrawn[]; closed: ThreadAsDrawn[] } {
   const sceneNumbers = sceneNumbersById(scenes);
   const numberOf = (sceneId: string | null): number | null => (sceneId === null ? null : sceneNumbers.get(sceneId) ?? null);
@@ -288,6 +322,7 @@ export function threadsOpenFirst(threads: ThreadRecord[], scenes: SceneRecord[])
         openedInSceneNumber: numberOf(thread.openedInSceneId),
         lastTouchedInSceneNumber: numberOf(thread.lastTouchedInSceneId),
         lastTouchNote: thread.touches.find((touch) => touch.sceneId === thread.lastTouchedInSceneId)?.note ?? '',
+        lastTouch: newestTouchOf(thread, numberOf),
         closedInSceneNumber: numberOf(thread.closedInSceneId),
       },
     }))
@@ -310,27 +345,60 @@ export function threadsOpenFirst(threads: ThreadRecord[], scenes: SceneRecord[])
 export interface WaypointAsDrawn {
   waypoint: WaypointRecord;
   reachedInSceneNumber: number | null;
+  /** The scene it was withdrawn at; null while it stands. */
+  withdrawnInSceneNumber: number | null;
+  /** What it said before its present words, oldest first. */
+  earlierWordings: EarlierWording[];
 }
 
 /**
- * Waypoints still ahead first, in the order the author set them, then the reached in scene order.
- * A waypoint is reached only by a standing scene: one a struck take reached is still ahead, since
- * the story never reached it in any take that is served.
+ * Waypoints still ahead first, in the order the author set them, then the reached in scene order,
+ * then the withdrawn in the order they were set. A waypoint is reached only by a standing scene:
+ * one a struck take reached is still ahead, since the story never reached it in any take that is
+ * served. A withdrawn waypoint is withdrawn whether or not it was reached, since a story is no
+ * longer told of it either way.
  */
-export function waypointsAheadFirst(snapshot: RunSnapshot): { ahead: WaypointAsDrawn[]; reached: WaypointAsDrawn[] } {
+export function waypointsAheadFirst(snapshot: RunSnapshot): { ahead: WaypointAsDrawn[]; reached: WaypointAsDrawn[]; withdrawn: WaypointAsDrawn[] } {
   const standingNumbers = new Map(snapshot.scenes.filter((scene) => scene.status === 'standing').map((scene) => [scene.id, scene.number]));
+  const sceneNumbers = sceneNumbersById(snapshot.scenes);
   const drawn = [...snapshot.waypoints]
     .sort((first, second) => first.createdAt.localeCompare(second.createdAt))
     .map((waypoint) => ({
       waypoint,
       reachedInSceneNumber: waypoint.reachedInSceneId === null ? null : standingNumbers.get(waypoint.reachedInSceneId) ?? null,
+      withdrawnInSceneNumber: waypoint.withdrawnInSceneId === null ? null : sceneNumbers.get(waypoint.withdrawnInSceneId) ?? null,
+      earlierWordings: earlierWordingsOfWaypoint(waypoint.id, snapshot),
     }));
+  const standing = drawn.filter((item) => item.waypoint.withdrawnInSceneId === null);
   return {
-    ahead: drawn.filter((item) => item.reachedInSceneNumber === null),
-    reached: drawn
+    ahead: standing.filter((item) => item.reachedInSceneNumber === null),
+    reached: standing
       .filter((item) => item.reachedInSceneNumber !== null)
       .sort((first, second) => (first.reachedInSceneNumber ?? 0) - (second.reachedInSceneNumber ?? 0)),
+    withdrawn: drawn.filter((item) => item.waypoint.withdrawnInSceneId !== null),
   };
+}
+
+/** One earlier wording of a waypoint, with the scene the change was made after. */
+export interface EarlierWording {
+  text: string;
+  /** The newest standing scene when the words were changed; null where the run had none yet. */
+  changedAfterSceneNumber: number | null;
+}
+
+/**
+ * Every wording a waypoint had before its present one, oldest first. Each rewording keeps the
+ * words it replaced, so the list is those, in the order they were replaced.
+ */
+export function earlierWordingsOfWaypoint(waypointId: Id, snapshot: RunSnapshot): EarlierWording[] {
+  const sceneNumbers = sceneNumbersById(snapshot.scenes);
+  return snapshot.waypointRewordings
+    .filter((rewording) => rewording.waypointId === waypointId)
+    .sort((first, second) => first.createdAt.localeCompare(second.createdAt))
+    .map((rewording) => ({
+      text: rewording.earlierText,
+      changedAfterSceneNumber: rewording.afterSceneId === null ? null : sceneNumbers.get(rewording.afterSceneId) ?? null,
+    }));
 }
 
 /** A journey with the number of the scene it was first travelled in, where one is known. */
@@ -649,7 +717,9 @@ export function whySlugIsNotWellFormed(slug: string): string | null {
 
 /** A size in megabytes as a person reads it, for the size refusal. */
 export function megabytesInWords(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  // A whole figure is said whole ("200 MB"), and anything else to one place ("16.3 MB").
+  const megabytes = bytes / (1024 * 1024);
+  return `${Number.isInteger(megabytes) ? megabytes : megabytes.toFixed(1)} MB`;
 }
 
 /**
@@ -788,4 +858,506 @@ export function unplacedInWords(unplacedCount: number): string {
   if (unplacedCount === 0) return 'Every line was placed.';
   if (unplacedCount === 1) return '1 line could not be placed.';
   return `${unplacedCount.toLocaleString('en')} lines could not be placed.`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Backing up a run and restoring one
+
+/**
+ * The largest body the server takes for `restore_run`: the figure of
+ * `LARGEST_BODY_BYTES_BY_OPERATION.restore_run` in apps/server/src/http-server.ts, which the
+ * contract does not hold. A backup is sent whole, so this is also the largest backup the page can
+ * restore.
+ */
+export const LARGEST_RESTORE_BODY_BYTES = 200 * 1024 * 1024;
+
+/**
+ * What the download button saves: the file name the server's own backups use, made from the run's
+ * slug and the moment the backup was taken, and the document written by the contract's one way of
+ * writing a backup out, so a file saved here and one saved by `pnpm export-run` are the same, byte
+ * for byte.
+ */
+export function backupDownloadOf(document: RunExportDocument, takenAt: Date): { fileName: string; text: string } {
+  return { fileName: backupFileName(document.runSlug, takenAt), text: runExportDocumentAsText(document) };
+}
+
+/**
+ * The largest backup file the page reads at all: twice what the server takes. A backup file is
+ * written with two spaces of indentation, and is sent without it, which takes off a fifth to a
+ * third of its size; no backup file shrinks to half. So a file under this may still fit once it
+ * is measured as it would be sent, which `restoreToSend` does, and a file over it never can.
+ */
+export const LARGEST_BACKUP_FILE_BYTES_READ = 2 * LARGEST_RESTORE_BODY_BYTES;
+
+/** The sentence under the download button, saying what the file holds. */
+export const BACKUP_DOWNLOAD_HINT =
+  'Saves everything this run holds, author-only material included, as one file. Keep it somewhere private: it holds what a story must never see. Restore it from the list of runs.';
+
+/** The label of the box that replaces the run already in the store. */
+export const REPLACE_ON_RESTORE_LABEL = 'Replace the run already here';
+
+/** What ticking the box does, said beside it. */
+export const REPLACE_ON_RESTORE_SENTENCE =
+  "Removes the run with this backup's name or id, and everything it holds, and puts the backup in its place. If the restore is refused or fails, that run is left as it was.";
+
+/** The restore button's text: plain, or saying it replaces the run already here. */
+export function restoreButtonText(running: boolean, replacing: boolean): string {
+  if (running) return replacing ? 'Replacing…' : 'Restoring…';
+  return replacing ? 'Restore, replacing the run already here' : 'Restore';
+}
+
+/**
+ * Why the picked backup file cannot be restored, asked before it is read, or null where it may be.
+ * Only a file too large to fit even without its spacing is turned away here; a smaller one is
+ * read and measured as it would be sent.
+ */
+export function whyBackupFileCannotStart(file: { name: string; size: number } | null): string | null {
+  if (file === null) return 'Pick a backup file.';
+  if (file.size === 0) return `The file ${file.name} is empty, so it is not a backup of a run.`;
+  if (file.size > LARGEST_BACKUP_FILE_BYTES_READ) {
+    return `The file comes to ${megabytesInWords(file.size)}. Sent without its spacing it would still be over ${megabytesInWords(LARGEST_RESTORE_BODY_BYTES)}, which is the most a restore takes.`;
+  }
+  return null;
+}
+
+/**
+ * The `restore_run` input from the text of a backup file, or why it cannot be sent. The outside of
+ * the document is checked here with the contract's own reader, so a file of another kind or an
+ * unread version is refused in the same words the server would use, without sending it. The rows
+ * are the store's to check. The body is measured as it will travel and held to the server's limit.
+ */
+export function restoreToSend(
+  fileText: string,
+  replace: boolean,
+): { ok: true; input: RequestOf<'restore_run'>; runSlug: string } | { ok: false; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fileText);
+  } catch {
+    return { ok: false, reason: 'This file is not a Timeweft backup of a run: it is not readable as JSON. The file may have been cut short or edited. Nothing was sent.' };
+  }
+  let document: RunExportDocument;
+  try {
+    document = readRunExportDocument(parsed);
+  } catch (error) {
+    if (error instanceof Refusal) return { ok: false, reason: `${error.message} Nothing was sent.` };
+    throw error;
+  }
+  const input: RequestOf<'restore_run'> = { document: document as unknown as RequestOf<'restore_run'>['document'], replace };
+  const bodyBytes = bodyBytesOf(input);
+  if (bodyBytes > LARGEST_RESTORE_BODY_BYTES) {
+    return {
+      ok: false,
+      reason: `The backup comes to ${megabytesInWords(bodyBytes)} as it would be sent, and the server takes at most ${megabytesInWords(LARGEST_RESTORE_BODY_BYTES)}. Nothing was sent.`,
+    };
+  }
+  return { ok: true, input, runSlug: document.runSlug };
+}
+
+/** Every count of rows, in words, in the order a restore writes them. Counts only, never content. */
+export function runRowCountsInWords(counts: RunExportRowCounts): Array<{ label: string; count: number }> {
+  return RUN_EXPORT_TABLE_NAMES.map((table) => ({ label: RUN_EXPORT_TABLE_IN_WORDS[table], count: counts[table] }));
+}
+
+/** The sentence saying what a restore did, naming the run replaced where there was one. */
+export function restoredInWords(report: RestoredRunReport): string {
+  if (report.replaced === null) return `Restored ${report.run.title} (${report.run.slug}).`;
+  const replaced = report.replaced.run;
+  return `Restored ${report.run.title} (${report.run.slug}), in place of ${replaced.title} (${replaced.slug}), which was removed with everything it held.`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The author's hand: what the forms on a run's page send, and the history they leave
+
+/**
+ * The newest standing scene of the run, which is the scene every act the author makes outside a
+ * scene is dated to (docs/decisions/0003). Null where the run has no standing scene yet.
+ */
+export function newestStandingScene(snapshot: RunSnapshot): SceneRecord | null {
+  let newest: SceneRecord | null = null;
+  for (const scene of snapshot.scenes) {
+    if (scene.status !== 'standing') continue;
+    if (newest === null || scene.number > newest.number) newest = scene;
+  }
+  return newest;
+}
+
+/** When an act made now takes effect, in words: "as of scene 3", or "before the scenes". */
+export function asOfNowInWords(snapshot: RunSnapshot): string {
+  const newest = newestStandingScene(snapshot);
+  return newest === null ? 'before the scenes' : `as of scene ${newest.number}`;
+}
+
+/**
+ * Why an act that has to stop at a scene cannot be made yet, or null where it can. Ending a fact,
+ * withdrawing, closing and touching all stop at the newest standing scene, so they wait for one.
+ */
+export function whyAnActNeedsAScene(snapshot: RunSnapshot): string | null {
+  return newestStandingScene(snapshot) === null
+    ? 'The run has no scene yet, so there is nothing for this to stop at. It can be done once a scene is saved.'
+    : null;
+}
+
+/** The numbers of the standing scenes, lowest first: the scenes a waypoint can be marked reached at. */
+export function standingSceneNumbers(snapshot: RunSnapshot): number[] {
+  return snapshot.scenes
+    .filter((scene) => scene.status === 'standing')
+    .map((scene) => scene.number)
+    .sort((first, second) => first - second);
+}
+
+/** What a form hands the server, or why it is not sent yet. */
+export type ToSend<Input> = { ok: true; input: Input } | { ok: false; reason: string };
+
+/** Text the author typed, trimmed, or the reason it cannot be sent empty. */
+export function typedTextOrReason(text: string, whatItIs: string): ToSend<string> {
+  const trimmed = text.trim();
+  return trimmed === '' ? { ok: false, reason: `Write ${whatItIs} first.` } : { ok: true, input: trimmed };
+}
+
+/** What an answer says the author should know. Only an entry's write carries cautions. */
+export function cautionsOfAnswer(answer: unknown): string[] {
+  if (typeof answer !== 'object' || answer === null || !('cautions' in answer)) return [];
+  const cautions = (answer as { cautions: unknown }).cautions;
+  return Array.isArray(cautions) ? cautions.filter((caution): caution is string => typeof caution === 'string') : [];
+}
+
+// The run's own details
+
+/** The run's details as the edit form holds them. */
+export interface RunDetailsForm {
+  title: string;
+  setting: string;
+  register: string;
+  status: RunStatus;
+}
+
+export function runDetailsFormOf(run: RunSnapshot['run']): RunDetailsForm {
+  return { title: run.title, setting: run.setting, register: run.register, status: run.status };
+}
+
+/**
+ * The `edit_run` input for what the form changed, and only that, or why nothing is sent. A title
+ * is trimmed and may not be empty; the setting and the register are kept as typed, since line
+ * breaks in them are the author's.
+ */
+export function runEditToSend(runSlug: string, run: RunSnapshot['run'], form: RunDetailsForm): ToSend<RequestOf<'edit_run'>> {
+  const title = form.title.trim();
+  if (title === '') return { ok: false, reason: 'The run needs a title.' };
+  const input: RequestOf<'edit_run'> = { run: runSlug };
+  if (title !== run.title) input.title = title;
+  if (form.setting !== run.setting) input.setting = form.setting;
+  if (form.register !== run.register) input.register = form.register;
+  if (form.status !== run.status) input.status = form.status;
+  if (Object.keys(input).length === 1) return { ok: false, reason: 'Nothing here differs from what the run holds.' };
+  return { ok: true, input };
+}
+
+const RUN_FIELD_LABELS: Record<RunEditRecord['field'], string> = {
+  title: 'Title',
+  setting: 'Setting',
+  register: 'How it is narrated',
+  status: 'Status',
+};
+
+/**
+ * One earlier value of a part of the run or of an entry, as the page draws it. `earlier` and
+ * `later` are ready to draw: each value in its own quotation marks, or "nothing recorded" where
+ * there was none, so an empty value never reads as a word that was typed.
+ */
+export interface EarlierValue {
+  label: string;
+  earlier: string;
+  later: string;
+  changedAfterSceneNumber: number | null;
+}
+
+const NOTHING_RECORDED = 'nothing recorded';
+
+/** One value in quotation marks, or "nothing recorded" where it is empty. */
+export function quotedValueInWords(value: string): string {
+  return value === '' ? NOTHING_RECORDED : `\u201c${value}\u201d`;
+}
+
+/**
+ * Names each in its own quotation marks, so a name that holds a comma still reads as one name;
+ * "nothing recorded" where there are none.
+ */
+export function quotedNamesInWords(names: readonly string[]): string {
+  return names.length === 0 ? NOTHING_RECORDED : names.map((name) => `\u201c${name}\u201d`).join(', ');
+}
+
+function statusInWords(value: string): string {
+  if (value === 'binding') return 'binding';
+  if (value === 'telling') return 'a telling';
+  return value;
+}
+
+/** Every change the author made to the run, oldest first, in words. */
+export function runHistoryInWords(snapshot: RunSnapshot): EarlierValue[] {
+  const sceneNumbers = sceneNumbersById(snapshot.scenes);
+  return [...snapshot.runEdits]
+    .sort((first, second) => first.createdAt.localeCompare(second.createdAt))
+    .map((edit) => {
+      const inWords = (value: string) => quotedValueInWords(edit.field === 'status' ? statusInWords(value) : value);
+      return {
+        label: RUN_FIELD_LABELS[edit.field],
+        earlier: inWords(edit.earlierValue),
+        later: inWords(edit.laterValue),
+        changedAfterSceneNumber: edit.afterSceneId === null ? null : sceneNumbers.get(edit.afterSceneId) ?? null,
+      };
+    });
+}
+
+/** Where a change was made, in words. */
+export function changedWhenInWords(changedAfterSceneNumber: number | null): string {
+  return changedAfterSceneNumber === null ? 'before the scenes' : `after scene ${changedAfterSceneNumber}`;
+}
+
+// Entries
+
+const ENTRY_FIELD_LABELS: Record<EntryEditRecord['field'], string> = {
+  name: 'Name',
+  alsoKnownAs: 'Other names',
+  pronoun: 'Pronoun',
+  kind: 'Kind',
+  visibility: 'Who sees it',
+};
+
+/** An entry edit's value in words: a list of other names is written as a JSON array. */
+function entryEditValueInWords(field: EntryEditRecord['field'], value: string): string {
+  if (field === 'alsoKnownAs') {
+    try {
+      const names: unknown = JSON.parse(value);
+      if (Array.isArray(names)) return quotedNamesInWords(names.map(String));
+    } catch {
+      return quotedValueInWords(value);
+    }
+    return quotedValueInWords(value);
+  }
+  if (field === 'visibility') return quotedValueInWords(value === 'author-only' ? 'author only' : 'open');
+  return quotedValueInWords(value);
+}
+
+/** Every change the author made to one entry, oldest first, in words. */
+export function entryHistoryInWords(entryId: Id, snapshot: RunSnapshot): EarlierValue[] {
+  const sceneNumbers = sceneNumbersById(snapshot.scenes);
+  return snapshot.entryEdits
+    .filter((edit) => edit.entryId === entryId)
+    .sort((first, second) => first.createdAt.localeCompare(second.createdAt))
+    .map((edit) => ({
+      label: ENTRY_FIELD_LABELS[edit.field],
+      earlier: entryEditValueInWords(edit.field, edit.earlierValue),
+      later: entryEditValueInWords(edit.field, edit.laterValue),
+      changedAfterSceneNumber: edit.afterSceneId === null ? null : sceneNumbers.get(edit.afterSceneId) ?? null,
+    }));
+}
+
+/**
+ * Other names as typed in their box: one per line, trimmed, each once whatever its case. A comma
+ * does not split, since a name may hold one ("Odo, the miller").
+ */
+export function namesOnePerLine(text: string): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const line of text.split('\n')) {
+    const name = line.trim();
+    if (name === '' || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    names.push(name);
+  }
+  return names;
+}
+
+/**
+ * How many rows a box typed one item per line needs to show every line and one more to type on,
+ * never fewer than two: a box shorter than what it holds hides lines with no sign they are there.
+ */
+export function rowsForLinesOf(text: string): number {
+  return Math.max(2, text.split('\n').length + 1);
+}
+
+/** A new entry as the add form holds it. Other names are typed one per line. */
+export interface NewEntryForm {
+  name: string;
+  kind: EntryKind;
+  alsoKnownAsText: string;
+  pronoun: string;
+  visibility: Visibility;
+}
+
+export function newEntryToSend(runSlug: string, form: NewEntryForm): ToSend<RequestOf<'add_entry'>> {
+  const name = typedTextOrReason(form.name, 'a name');
+  if (!name.ok) return name;
+  return {
+    ok: true,
+    input: {
+      run: runSlug,
+      name: name.input,
+      kind: form.kind,
+      alsoKnownAs: namesOnePerLine(form.alsoKnownAsText),
+      pronoun: form.pronoun.trim(),
+      visibility: form.visibility,
+    },
+  };
+}
+
+/** An entry's details as the edit form holds them. */
+export interface EntryDetailsForm {
+  kind: EntryKind;
+  alsoKnownAsText: string;
+  pronoun: string;
+}
+
+export function entryDetailsFormOf(entry: EntryRecord): EntryDetailsForm {
+  return { kind: entry.kind, alsoKnownAsText: entry.alsoKnownAs.join('\n'), pronoun: entry.pronoun };
+}
+
+/** The `edit_entry` input for what the form changed, and only that, or why nothing is sent. */
+export function entryEditToSend(entry: EntryRecord, form: EntryDetailsForm): ToSend<RequestOf<'edit_entry'>> {
+  const input: RequestOf<'edit_entry'> = { entry: entry.id };
+  if (form.kind !== entry.kind) input.kind = form.kind;
+  const alsoKnownAs = namesOnePerLine(form.alsoKnownAsText);
+  if (JSON.stringify(alsoKnownAs) !== JSON.stringify(entry.alsoKnownAs)) input.alsoKnownAs = alsoKnownAs;
+  const pronoun = form.pronoun.trim();
+  if (pronoun !== entry.pronoun) input.pronoun = pronoun;
+  if (Object.keys(input).length === 1) return { ok: false, reason: 'Nothing here differs from what the entry holds.' };
+  return { ok: true, input };
+}
+
+/** The `rename_entry` input, or why it is not sent. */
+export function renameToSend(entry: EntryRecord, typedName: string): ToSend<RequestOf<'rename_entry'>> {
+  const name = typedTextOrReason(typedName, 'the new name');
+  if (!name.ok) return name;
+  if (name.input === entry.name) return { ok: false, reason: `It is called ${entry.name} already.` };
+  return { ok: true, input: { entry: entry.id, name: name.input } };
+}
+
+/** A fact the author states, as the form on an entry holds it. */
+export interface FactForm {
+  property: string;
+  value: string;
+  /** The id of the entry it points at, or '' for none. */
+  aboutEntryId: string;
+  visibility: Visibility;
+  note: string;
+}
+
+export const EMPTY_FACT_FORM: FactForm = { property: '', value: '', aboutEntryId: '', visibility: 'open', note: '' };
+
+/** The `state_fact` input, naming the entry and what it points at by id, or why it is not sent. */
+export function factToSend(runSlug: string, entryId: Id, form: FactForm): ToSend<RequestOf<'state_fact'>> {
+  const property = typedTextOrReason(form.property, 'what is being said (the property)');
+  if (!property.ok) return property;
+  const value = typedTextOrReason(form.value, 'what is so (the value)');
+  if (!value.ok) return value;
+  const input: RequestOf<'state_fact'> = {
+    run: runSlug, entryId, property: property.input, value: value.input, visibility: form.visibility, note: form.note.trim(),
+  };
+  if (form.aboutEntryId !== '') input.aboutEntryId = form.aboutEntryId;
+  return { ok: true, input };
+}
+
+/** The properties an entry has been given, so the fact form can offer them. */
+export function propertiesOfEntry(entryId: Id, snapshot: RunSnapshot): string[] {
+  return [...new Set(snapshot.facts.filter((fact) => fact.entryId === entryId).map((fact) => fact.property))];
+}
+
+/** Entries by name, for a choice of which one a fact or a thread points at. */
+export function entriesByName(entries: EntryRecord[]): EntryRecord[] {
+  return [...entries].sort((first, second) => first.name.localeCompare(second.name) || first.createdAt.localeCompare(second.createdAt));
+}
+
+/**
+ * The entries a thread may be about, by name. A thread is told to a story, so only an open entry is
+ * offered; the store refuses an author-only one.
+ */
+export function entriesAThreadMayBeAbout(entries: EntryRecord[]): EntryRecord[] {
+  return entriesByName(entries.filter((entry) => entry.visibility === 'open'));
+}
+
+// Rulings
+
+/**
+ * An entry a ruling may name. A ruling is told to a story and names its entries by name, so only
+ * an open entry may be named; one whose name another open entry shares is offered but marked, since
+ * the server cannot tell which is meant and refuses it.
+ */
+export interface EntryARulingMayName {
+  entry: EntryRecord;
+  sharesItsName: boolean;
+}
+
+export function entriesARulingMayName(snapshot: RunSnapshot): EntryARulingMayName[] {
+  const open = entriesByName(snapshot.entries.filter((entry) => entry.visibility === 'open'));
+  const answering = new Map<string, number>();
+  for (const entry of open) {
+    for (const name of [entry.name, ...entry.alsoKnownAs]) {
+      const key = name.trim().toLowerCase();
+      answering.set(key, (answering.get(key) ?? 0) + 1);
+    }
+  }
+  return open.map((entry) => ({ entry, sharesItsName: (answering.get(entry.name.trim().toLowerCase()) ?? 0) > 1 }));
+}
+
+/** A ruling as the form holds it. Topics are typed one per line or between commas. */
+export interface RulingForm {
+  text: string;
+  scope: RulingScope;
+  topicsText: string;
+  /** The ids of the open entries it is about. */
+  aboutEntryIds: Id[];
+}
+
+/**
+ * The `record_ruling` input, or why it is not sent. The words are sent exactly as typed, since a
+ * ruling is kept word for word; only words that are nothing but spaces are refused.
+ */
+export function rulingToSend(runSlug: string, form: RulingForm, snapshot: RunSnapshot): ToSend<RequestOf<'record_ruling'>> {
+  if (form.text.trim() === '') return { ok: false, reason: 'Write the ruling first.' };
+  const namesById = new Map(snapshot.entries.map((entry) => [entry.id, entry.name]));
+  return {
+    ok: true,
+    input: {
+      run: runSlug,
+      text: form.text,
+      statedByAuthor: true,
+      scope: form.scope,
+      topics: upcomingNamesFromText(form.topicsText),
+      about: form.aboutEntryIds.flatMap((id) => {
+        const name = namesById.get(id);
+        return name === undefined ? [] : [name];
+      }),
+    },
+  };
+}
+
+/** Rulings still in force, and those withdrawn, each in the order given. */
+export function rulingsSplitByWithdrawal(rulings: RulingRecord[]): { inForce: RulingRecord[]; withdrawn: RulingRecord[] } {
+  const byNumber = [...rulings].sort((first, second) => first.number - second.number);
+  return {
+    inForce: byNumber.filter((ruling) => ruling.withdrawnInSceneId === null),
+    withdrawn: byNumber.filter((ruling) => ruling.withdrawnInSceneId !== null),
+  };
+}
+
+// What each lasting act says before it is made
+
+/** The one line a lasting act says before it is made: what it does, and that nothing is deleted. */
+export function lastingActInWords(act: 'end-fact' | 'withdraw-ruling' | 'withdraw-waypoint' | 'close-thread' | 'turn-author-only' | 'turn-open', snapshot: RunSnapshot): string {
+  const when = asOfNowInWords(snapshot);
+  switch (act) {
+    case 'end-fact':
+      return `This fact stops holding ${when}, with nothing in its place. Nothing is deleted: it stays in the history.`;
+    case 'withdraw-ruling':
+      return `A story is no longer told this ruling, ${when}. Nothing is deleted: it is kept word for word and shown here as withdrawn.`;
+    case 'withdraw-waypoint':
+      return `A story is no longer told to steer towards this, ${when}. Nothing is deleted: it is kept and shown here as withdrawn.`;
+    case 'close-thread':
+      return `The thread closes ${when} with the words given. Nothing is deleted: it is kept and shown as closed.`;
+    case 'turn-author-only':
+      return 'A story stops being told of this entry, its facts and its trail at once. Nothing is deleted: turning it open again puts them all back.';
+    case 'turn-open':
+      return 'A story is told of this entry again, with its facts and its trail. Nothing else changes.';
+  }
 }

@@ -8,9 +8,11 @@
  * name.
  */
 import type {
-  AnswerByOperation, Briefing, ImportedRunReport, CollisionRecord, EntryLookup, FactRecord, FoundItem, Id, OperationName,
-  RulingRecord, RunListing, RunSnapshot, SavedScene, SceneInFull, SceneRecord, SceneSummary, ThreadRecord,
+  AnswerByOperation, Briefing, ImportedRunReport, CollisionRecord, EntryLookup, EntryWritten, FactRecord, FoundItem, Id,
+  OperationName, RulingRecord, RunListing, RunRecord, RunSnapshot, SavedScene, SceneInFull, SceneRecord, SceneSummary,
+  ThreadRecord, WaypointRecord, RestoredRunReport, RunExportDocument, RunExportRowCounts, RunExportTableName,
 } from '@timeweft/contract';
+import { RUN_EXPORT_TABLE_IN_WORDS, RUN_EXPORT_TABLE_NAMES } from '@timeweft/contract';
 import { onOneLine } from '@timeweft/briefing';
 
 export interface NamesInTheRun {
@@ -225,6 +227,54 @@ export function collisionInWords(collision: CollisionRecord, names: NamesInTheRu
   return collisionSentence(names, collision);
 }
 
+/** A fact the author ended: what held, and the scene it stopped holding at. */
+export function endedFactInWords(fact: FactRecord, names: NamesInTheRun): string {
+  const until = sceneLabel(names, fact.untilSceneId);
+  return `Ended: ${factInWordsWith(names, fact)}${until === null ? '' : `, until ${until}`}. Nothing holds in its place, and the fact is kept as history.`;
+}
+
+/** A ruling the author withdrew, still said word for word. */
+export function withdrawnRulingInWords(ruling: RulingRecord, names: NamesInTheRun): string {
+  const since = sceneLabel(names, ruling.withdrawnInSceneId);
+  return `Withdrawn${since === null ? '' : ` as of ${since}`}, and no longer told to a story. ${rulingInWords(ruling, names)}`;
+}
+
+/** A waypoint with its id, its newest words and where it stands: ahead, reached or withdrawn. */
+export function waypointInWords(waypoint: WaypointRecord, names: NamesInTheRun): string {
+  const reached = sceneLabel(names, waypoint.reachedInSceneId);
+  const withdrawn = sceneLabel(names, waypoint.withdrawnInSceneId);
+  const state = waypoint.withdrawnInSceneId !== null
+    ? `withdrawn${withdrawn === null ? '' : ` as of ${withdrawn}`}`
+    : waypoint.reachedInSceneId !== null ? `reached${reached === null ? '' : ` at ${reached}`}` : 'ahead';
+  return `Waypoint ${waypoint.id} (${state}): ${waypoint.text}`;
+}
+
+/** A run as it stands after the author edited it: every part the author may change, said whole. */
+export function editedRunInWords(run: RunRecord): string {
+  return [
+    `Run ${run.slug}: "${run.title}" (${run.status}).`,
+    `Setting: ${run.setting === '' ? 'none given' : run.setting}`,
+    `Register: ${run.register === '' ? 'none given' : run.register}`,
+    'What it said before is kept.',
+  ].join('\n');
+}
+
+/** One thread after the author opened, touched or closed it. */
+export function threadInWords(verb: string, thread: ThreadRecord, names: NamesInTheRun): string {
+  return `${verb}.\n${threadsInWords([thread], names)}`;
+}
+
+/** An entry the author added or changed, said as it now is, and every caution the store gave. */
+export function entryWrittenInWords(verb: string, written: EntryWritten): string {
+  const entry = written.entry;
+  const details = [entry.kind, entry.pronoun === '' ? null : entry.pronoun, entry.visibility]
+    .filter((part): part is string => part !== null).join(', ');
+  const otherNames = entry.alsoKnownAs.length === 0 ? '' : `, also ${entry.alsoKnownAs.join(', ')}`;
+  const lines = [`${verb} ${entry.name} (${details}${otherNames}), id ${entry.id}.`];
+  for (const caution of written.cautions) lines.push(`Caution: ${caution}`);
+  return lines.join('\n');
+}
+
 /** An import said as counts, then every line the reader could not place, word for word. */
 export function importedRunInWords(report: ImportedRunReport): string {
   const { counts } = report;
@@ -244,6 +294,30 @@ export function importedRunInWords(report: ImportedRunReport): string {
   return lines.join('\n');
 }
 
+/** How many rows of each table, one line per table, in the order a restore writes them. Counts only, never content. */
+export function rowCountsInWords(counts: RunExportRowCounts, indent = ''): string[] {
+  return RUN_EXPORT_TABLE_NAMES.map((table) => `${indent}${RUN_EXPORT_TABLE_IN_WORDS[table]}: ${counts[table]}`);
+}
+
+/** The rows a backup document holds, counted per table. */
+export function rowCountsOf(document: RunExportDocument): RunExportRowCounts {
+  return Object.fromEntries(RUN_EXPORT_TABLE_NAMES.map((table) => [table, document.tables[table].length])) as RunExportRowCounts;
+}
+
+/** An export said as counts. The document itself is the answer; words never carry its content. */
+export function exportedRunInWords(document: RunExportDocument): string {
+  return [`A backup of the run ${document.runSlug}, taken at ${document.exportedAt}, format version ${document.formatVersion}. It holds:`, ...rowCountsInWords(rowCountsOf(document), '- ')].join('\n');
+}
+
+/** A restore said as counts, and what a replaced run held. */
+export function restoredRunInWords(report: RestoredRunReport): string {
+  const lines = [`Restored the run ${report.run.slug}. It holds:`, ...rowCountsInWords(report.rowsRestored, '- ')];
+  if (report.replaced !== null) {
+    lines.push(`It replaced the run ${report.replaced.run.slug}, which was removed. That run held:`, ...rowCountsInWords(report.replaced.rowsRemoved, '- '));
+  }
+  return lines.join('\n');
+}
+
 /** One rendering per operation, so an operation added to the contract needs a rendering here too. */
 export const ANSWER_IN_WORDS: { [Name in OperationName]: (answer: AnswerByOperation[Name], names: NamesInTheRun) => string } = {
   list_runs: (answer) => runListingsInWords(answer),
@@ -259,8 +333,24 @@ export const ANSWER_IN_WORDS: { [Name in OperationName]: (answer: AnswerByOperat
   list_threads: (answer, names) => threadsInWords(answer, names),
   record_ruling: (answer, names) => `Recorded. ${rulingInWords(answer, names)}`,
   state_fact: (answer, names) => factInWords(answer, names),
+  end_fact: (answer, names) => endedFactInWords(answer, names),
+  withdraw_ruling: (answer, names) => withdrawnRulingInWords(answer, names),
+  add_waypoint: (answer, names) => `Added. ${waypointInWords(answer, names)}`,
+  reword_waypoint: (answer, names) => `Reworded; what it said before is kept. ${waypointInWords(answer, names)}`,
+  mark_waypoint_reached: (answer, names) => `Marked reached. ${waypointInWords(answer, names)}`,
+  withdraw_waypoint: (answer, names) => `Withdrawn, kept, and no longer told to a story. ${waypointInWords(answer, names)}`,
+  edit_run: (answer) => editedRunInWords(answer),
+  open_thread: (answer, names) => threadInWords('Opened', answer, names),
+  touch_thread: (answer, names) => threadInWords('Touched', answer, names),
+  close_thread: (answer, names) => threadInWords('Closed', answer, names),
+  add_entry: (answer) => entryWrittenInWords('Added', answer),
+  edit_entry: (answer) => entryWrittenInWords('Changed; what it said before is kept.', answer),
+  rename_entry: (answer) => entryWrittenInWords('Renamed; the old name is among its other names.', answer),
+  set_entry_visibility: (answer) => entryWrittenInWords(answer.entry.visibility === 'open' ? 'Turned open:' : 'Turned author-only:', answer),
   list_collisions: (answer, names) => collisionsInWords(answer, names),
   settle_collision: (answer, names) => collisionInWords(answer, names),
   read_run: (answer) => runSnapshotInWords(answer),
   import_run: (answer) => importedRunInWords(answer),
+  export_run: (answer) => exportedRunInWords(answer),
+  restore_run: (answer) => restoredRunInWords(answer),
 };

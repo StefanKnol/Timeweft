@@ -15,21 +15,24 @@
 import { randomUUID } from 'node:crypto';
 import { sql, type Kysely } from 'kysely';
 import {
-  Refusal, type CollisionRecord, type EntryRecord, type FactRecord, type InputOf, type RulingRecord,
-  type RunListing, type RunSnapshot, type SavedScene, type SceneInput, type Source, type Store,
-  type ThreadRecord, type Visibility, type ImportedRun, type ClockReading, type ReplacedImport, RunAlreadyExists,
+  Refusal, type CollisionRecord, type EntryRecord, type EntryWritten, type FactRecord, type InputOf, type RulingRecord,
+  type RunListing, type RunRecord, type RunSnapshot, type SavedScene, type SceneInput, type Source, type Store,
+  type ThreadRecord, type Visibility, type ImportedRun, type ClockReading, type ReplacedImport, type WaypointRecord,
+  type RestoredRunReport, type RunExportDocument, RunAlreadyExists,
 } from '@timeweft/contract';
 import type { Database } from './database.ts';
-import { applyMigrations } from './migrations.ts';
+import { applyMigrations, WRITE_MARKS } from './migrations.ts';
 import { NameIndex, normaliseName, normaliseProperty } from './names.ts';
 import {
-  collisionFromRow, entryFromRow, factFromRow, rulingFromRow, runFromRow, sceneFromRow,
+  collisionFromRow, entryFromRow, factFromRow, rulingFromRow, runFromRow, sceneFromRow, waypointFromRow,
   type EntryRow, type FactRow, type RunRow, type SceneRow,
 } from './rows.ts';
 import { filterForStory, readThreadRecords, readWholeRun } from './snapshot.ts';
 import { importRunInto } from './import.ts';
 import { markRunAsImported, replaceImportedRunIn } from './replace-imported-run.ts';
 import { exactCount, looksLikeAnId } from './checks.ts';
+import { exportRunFrom } from './export-run.ts';
+import { restoreRunInto } from './restore-run.ts';
 
 type Audience = 'story' | 'author';
 
@@ -152,23 +155,24 @@ export class PostgresStore implements Store {
   async stateFact(input: InputOf<'state_fact'>): Promise<FactRecord> {
     return this.writeInRun(input.run, async (transaction, run) => {
       const names = await liveEntryIndex(transaction, run.id, 'author');
-      const entry = names.resolve(input.entry, 'as the entry the fact is about');
-      const about = input.about === undefined ? null : names.resolve(input.about, 'as what the fact is about');
+      const entry = entryNamedOrById(names, input.entry, input.entryId, 'as the entry the fact is about', true)!;
+      const about = entryNamedOrById(names, input.about, input.aboutEntryId, 'as what the fact is about', false);
       const newest = await newestStandingScene(transaction, run.id);
       const sceneId = newest?.id ?? null;
       const property = normaliseProperty(input.property);
+      const value = wordsGiven(input.value, 'A value');
       // Each lane closes only its own: an author-only fact never ends an open one, or the story would
       // see a value end with nothing in its place, and an open fact never ends an author-only one.
       const holding = await holdingFacts(transaction, entry.id, property, input.visibility);
       const identical = holding.find((fact) =>
-        fact.source === 'author' && fact.value === input.value && fact.about_entry_id === (about?.id ?? null));
+        fact.source === 'author' && fact.value === value && fact.about_entry_id === (about?.id ?? null));
       if (identical !== undefined) return factFromRow(identical);
       if (holding.length > 0 && sceneId === null) {
         throw new Refusal(`"${entry.name}" already holds a ${property} and the run has no scene yet for it to stop holding at. Save the first scene, then state this.`);
       }
       if (sceneId !== null) await closeFacts(transaction, holding, sceneId, null);
       return factFromRow(await insertFact(transaction, {
-        runId: run.id, entryId: entry.id, property, value: input.value,
+        runId: run.id, entryId: entry.id, property, value,
         aboutEntryId: about?.id ?? null, fromSceneId: sceneId, source: 'author',
         visibility: input.visibility, note: input.note, establishedBySceneId: null,
       }));
@@ -227,6 +231,239 @@ export class PostgresStore implements Store {
     });
   }
 
+  /*
+   * The author's hand. Every door below dates an act made outside a scene by one rule (see
+   * docs/decisions/0003-the-authors-hand.md): to the newest standing scene of the run when the act
+   * is made, with no scene's save recorded as having done it, so a redo of that scene carries the
+   * act onto the new take (see moveOutsideReferencesOntoTheNewTake) and never takes it back. A row
+   * changed in place takes a fresh write mark, so replacing an earlier import sees the change.
+   */
+
+  async endFact(input: InputOf<'end_fact'>): Promise<FactRecord> {
+    const missing = `There is no fact with the id "${input.fact}".`;
+    return this.writeInRunOf('facts', input.fact, missing, async (transaction, run) => {
+      const fact = await transaction.selectFrom('facts').selectAll().where('id', '=', input.fact).executeTakeFirstOrThrow();
+      if (fact.until_scene_id !== null) throw new Refusal(`The fact "${fact.property}: ${fact.value}" has stopped holding already.`);
+      const newest = await newestSceneToStopAt(transaction, run, 'a fact to stop holding at');
+      const ended = await transaction.updateTable('facts')
+        .set({ until_scene_id: newest.id, closed_by_scene_id: null, write_mark: FRESH_WRITE_MARK })
+        .where('id', '=', fact.id).returningAll().executeTakeFirstOrThrow();
+      return factFromRow(ended);
+    });
+  }
+
+  async withdrawRuling(input: InputOf<'withdraw_ruling'>): Promise<RulingRecord> {
+    const missing = `There is no ruling with the id "${input.ruling}".`;
+    return this.writeInRunOf('rulings', input.ruling, missing, async (transaction, run) => {
+      const ruling = await transaction.selectFrom('rulings').selectAll().where('id', '=', input.ruling).executeTakeFirstOrThrow();
+      if (ruling.withdrawn_in_scene_id !== null) throw new Refusal(`Ruling ${ruling.number} is withdrawn already.`);
+      const newest = await newestSceneToStopAt(transaction, run, 'a ruling to be withdrawn at');
+      const withdrawn = await transaction.updateTable('rulings')
+        .set({ withdrawn_in_scene_id: newest.id, write_mark: FRESH_WRITE_MARK })
+        .where('id', '=', ruling.id).returningAll().executeTakeFirstOrThrow();
+      const about = await transaction.selectFrom('ruling_about_entries').select('entry_id')
+        .where('ruling_id', '=', ruling.id).orderBy('position').execute();
+      return rulingFromRow(withdrawn, about.map((row) => row.entry_id));
+    });
+  }
+
+  async addWaypoint(input: InputOf<'add_waypoint'>): Promise<WaypointRecord> {
+    return this.writeInRun(input.run, async (transaction, run) => {
+      const text = wordsGiven(input.text, 'A waypoint');
+      const row = await transaction.insertInto('waypoints')
+        .values({ id: randomUUID(), run_id: run.id, text, reached_in_scene_id: null })
+        .returningAll().executeTakeFirstOrThrow();
+      return waypointFromRow(row);
+    });
+  }
+
+  async rewordWaypoint(input: InputOf<'reword_waypoint'>): Promise<WaypointRecord> {
+    const missing = `There is no waypoint with the id "${input.waypoint}".`;
+    return this.writeInRunOf('waypoints', input.waypoint, missing, async (transaction, run) => {
+      const waypoint = await transaction.selectFrom('waypoints').selectAll().where('id', '=', input.waypoint).executeTakeFirstOrThrow();
+      if (waypoint.withdrawn_in_scene_id !== null) throw new Refusal(`The waypoint "${waypoint.text}" is withdrawn, so it is not reworded.`);
+      const text = wordsGiven(input.text, 'A waypoint');
+      if (text === waypoint.text) throw new Refusal(`The waypoint already says "${waypoint.text}", so nothing was changed.`);
+      const newest = await newestStandingScene(transaction, run.id);
+      await transaction.insertInto('waypoint_rewordings').values({
+        id: randomUUID(), run_id: run.id, waypoint_id: waypoint.id, earlier_text: waypoint.text, later_text: text,
+        after_scene_id: newest?.id ?? null,
+      }).execute();
+      const reworded = await transaction.updateTable('waypoints').set({ text })
+        .where('id', '=', waypoint.id).returningAll().executeTakeFirstOrThrow();
+      return waypointFromRow(reworded);
+    });
+  }
+
+  async markWaypointReached(input: InputOf<'mark_waypoint_reached'>): Promise<WaypointRecord> {
+    const missing = `There is no waypoint with the id "${input.waypoint}".`;
+    return this.writeInRunOf('waypoints', input.waypoint, missing, async (transaction, run) => {
+      const waypoint = await transaction.selectFrom('waypoints').selectAll().where('id', '=', input.waypoint).executeTakeFirstOrThrow();
+      if (waypoint.withdrawn_in_scene_id !== null) throw new Refusal(`The waypoint "${waypoint.text}" is withdrawn, so it is not marked reached.`);
+      if (waypoint.reached_in_scene_id !== null) throw new Refusal(`The waypoint "${waypoint.text}" is reached already.`);
+      const scene = await transaction.selectFrom('scenes').selectAll()
+        .where('run_id', '=', run.id).where('number', '=', input.scene).where('status', '=', 'standing').executeTakeFirst();
+      if (scene === undefined) throw new Refusal(`The run "${run.slug}" has no standing scene ${input.scene}.`);
+      // No scene's save reached it, so a redo of that scene moves it onto the new take and leaves it reached.
+      const reached = await transaction.updateTable('waypoints')
+        .set({ reached_in_scene_id: scene.id, reached_by_scene_id: null, write_mark: FRESH_WRITE_MARK })
+        .where('id', '=', waypoint.id).returningAll().executeTakeFirstOrThrow();
+      return waypointFromRow(reached);
+    });
+  }
+
+  async withdrawWaypoint(input: InputOf<'withdraw_waypoint'>): Promise<WaypointRecord> {
+    const missing = `There is no waypoint with the id "${input.waypoint}".`;
+    return this.writeInRunOf('waypoints', input.waypoint, missing, async (transaction, run) => {
+      const waypoint = await transaction.selectFrom('waypoints').selectAll().where('id', '=', input.waypoint).executeTakeFirstOrThrow();
+      if (waypoint.withdrawn_in_scene_id !== null) throw new Refusal(`The waypoint "${waypoint.text}" is withdrawn already.`);
+      const newest = await newestSceneToStopAt(transaction, run, 'a waypoint to be withdrawn at');
+      const withdrawn = await transaction.updateTable('waypoints')
+        .set({ withdrawn_in_scene_id: newest.id, write_mark: FRESH_WRITE_MARK })
+        .where('id', '=', waypoint.id).returningAll().executeTakeFirstOrThrow();
+      return waypointFromRow(withdrawn);
+    });
+  }
+
+  async editRun(input: InputOf<'edit_run'>): Promise<RunRecord> {
+    return this.writeInRun(input.run, async (transaction, run) => {
+      const given: Array<['title' | 'setting' | 'register' | 'status', string | undefined]> = [
+        ['title', input.title === undefined ? undefined : wordsGiven(input.title, 'A title')],
+        ['setting', input.setting], ['register', input.register], ['status', input.status],
+      ];
+      const changed = given.filter((pair): pair is [typeof pair[0], string] => pair[1] !== undefined && pair[1] !== run[pair[0]]);
+      if (changed.length === 0) throw new Refusal(`Nothing given differs from what the run "${run.slug}" holds, so nothing was changed.`);
+      const newest = await newestStandingScene(transaction, run.id);
+      await transaction.insertInto('run_edits').values(changed.map(([field, laterValue]) => ({
+        id: randomUUID(), run_id: run.id, field, earlier_value: run[field], later_value: laterValue,
+        after_scene_id: newest?.id ?? null,
+      }))).execute();
+      const edited = await transaction.updateTable('runs').set(Object.fromEntries(changed))
+        .where('id', '=', run.id).returningAll().executeTakeFirstOrThrow();
+      return runFromRow(edited);
+    });
+  }
+
+  async openThread(input: InputOf<'open_thread'>): Promise<ThreadRecord> {
+    return this.writeInRun(input.run, async (transaction, run) => {
+      const names = await liveEntryIndex(transaction, run.id, 'author');
+      const aboutIds = uniqueIds(input.aboutEntryIds.map((id) => {
+        const entry = names.byId(id);
+        if (entry === null) throw new Refusal(`This run has no entry with the id "${id}" for the thread to be about.`);
+        // A thread is told to a story, as a ruling is, so it may only be about an entry a story sees.
+        if (entry.visibility !== 'open') {
+          throw new Refusal(`"${entry.name}" is author-only, and a thread is told to a story, so a thread cannot be about it. Turn it open first, or leave it out.`);
+        }
+        return entry.id;
+      }));
+      const newest = await newestStandingScene(transaction, run.id);
+      const row = await transaction.insertInto('threads').values({
+        id: randomUUID(), run_id: run.id, text: wordsGiven(input.text, 'A thread'), opened_in_scene_id: newest?.id ?? null,
+        closed_in_scene_id: null, resolution: '', established_by_scene_id: null, closed_by_scene_id: null,
+      }).returningAll().executeTakeFirstOrThrow();
+      if (aboutIds.length > 0) {
+        await transaction.insertInto('thread_about_entries')
+          .values(aboutIds.map((entryId, position) => ({ thread_id: row.id, entry_id: entryId, position }))).execute();
+      }
+      return (await readThreadRecords(transaction, run.id, [row.id]))[0]!;
+    });
+  }
+
+  async touchThread(input: InputOf<'touch_thread'>): Promise<ThreadRecord> {
+    const missing = `There is no thread with the id "${input.thread}".`;
+    return this.writeInRunOf('threads', input.thread, missing, async (transaction, run) => {
+      const thread = await openThreadOfThisRun(transaction, run.id, input.thread, 'touched');
+      const newest = await newestSceneToStopAt(transaction, run, 'a thread to be touched at');
+      const already = await transaction.selectFrom('thread_touches').select('note')
+        .where('thread_id', '=', thread.id).where('scene_id', '=', newest.id).executeTakeFirst();
+      if (already !== undefined) {
+        throw new Refusal(`Scene ${newest.number} touched the thread "${thread.text}" already, so it was not touched again.`);
+      }
+      // No scene's save wrote it, so a redo of that scene moves it onto the new take.
+      await transaction.insertInto('thread_touches')
+        .values({ thread_id: thread.id, scene_id: newest.id, note: input.note.trim(), written_by_scene_id: null, by_author: true }).execute();
+      // The touch row keeps no write mark of its own, so the thread takes a fresh one.
+      await transaction.updateTable('threads').set({ write_mark: FRESH_WRITE_MARK }).where('id', '=', thread.id).execute();
+      return (await readThreadRecords(transaction, run.id, [thread.id]))[0]!;
+    });
+  }
+
+  async closeThread(input: InputOf<'close_thread'>): Promise<ThreadRecord> {
+    const missing = `There is no thread with the id "${input.thread}".`;
+    return this.writeInRunOf('threads', input.thread, missing, async (transaction, run) => {
+      const thread = await openThreadOfThisRun(transaction, run.id, input.thread, 'closed');
+      const newest = await newestSceneToStopAt(transaction, run, 'a thread to be closed at');
+      await transaction.updateTable('threads')
+        .set({ closed_in_scene_id: newest.id, resolution: wordsGiven(input.resolution, 'A resolution'), closed_by_scene_id: null, write_mark: FRESH_WRITE_MARK })
+        .where('id', '=', thread.id).execute();
+      return (await readThreadRecords(transaction, run.id, [thread.id]))[0]!;
+    });
+  }
+
+  async addEntry(input: InputOf<'add_entry'>): Promise<EntryWritten> {
+    return this.writeInRun(input.run, async (transaction, run) => {
+      const names = await liveEntryIndex(transaction, run.id, 'author');
+      const name = wordsGiven(input.name, 'A name');
+      const alsoKnownAs = cleanNames(input.alsoKnownAs);
+      const cautions = namesAnsweringElsewhere(names, [name, ...alsoKnownAs], null);
+      const row = await transaction.insertInto('entries').values({
+        id: randomUUID(), run_id: run.id, kind: input.kind, name, also_known_as: alsoKnownAs,
+        pronoun: input.pronoun.trim(), introduced_in_scene_id: null, source: 'author', visibility: input.visibility,
+      }).returningAll().executeTakeFirstOrThrow();
+      return { entry: entryFromRow(row), cautions };
+    });
+  }
+
+  async editEntry(input: InputOf<'edit_entry'>): Promise<EntryWritten> {
+    return this.writeEntry(input.entry, async (transaction, run, entry, names) => {
+      const changes: EntryChange[] = [];
+      if (input.kind !== undefined && input.kind !== entry.kind) changes.push({ field: 'kind', earlier: entry.kind, later: input.kind });
+      if (input.pronoun !== undefined && input.pronoun.trim() !== entry.pronoun) {
+        changes.push({ field: 'pronoun', earlier: entry.pronoun, later: input.pronoun.trim() });
+      }
+      let cautions: string[] = [];
+      if (input.alsoKnownAs !== undefined) {
+        const alsoKnownAs = cleanNames(input.alsoKnownAs);
+        if (JSON.stringify(alsoKnownAs) !== JSON.stringify(entry.also_known_as)) {
+          changes.push({ field: 'alsoKnownAs', earlier: entry.also_known_as, later: alsoKnownAs });
+          cautions = namesAnsweringElsewhere(names, alsoKnownAs, entry.id);
+        }
+      }
+      if (changes.length === 0) throw new Refusal(`Nothing given differs from what "${entry.name}" holds, so nothing was changed.`);
+      return { entry: await writeEntryChanges(transaction, run, entry, changes), cautions };
+    });
+  }
+
+  async renameEntry(input: InputOf<'rename_entry'>): Promise<EntryWritten> {
+    return this.writeEntry(input.entry, async (transaction, run, entry, names) => {
+      const name = wordsGiven(input.name, 'A name');
+      if (name === entry.name) throw new Refusal(`The entry is called "${entry.name}" already, so nothing was changed.`);
+      // The old name joins the other names, so it is still found by it; the new name leaves them,
+      // since it is the name now. Both are compared case-blind, as names are found.
+      const alsoKnownAs = entry.also_known_as.filter((other) => normaliseName(other) !== normaliseName(name));
+      if (!alsoKnownAs.some((other) => normaliseName(other) === normaliseName(entry.name))) alsoKnownAs.push(entry.name);
+      const changes: EntryChange[] = [{ field: 'name', earlier: entry.name, later: name }];
+      if (JSON.stringify(alsoKnownAs) !== JSON.stringify(entry.also_known_as)) {
+        changes.push({ field: 'alsoKnownAs', earlier: entry.also_known_as, later: alsoKnownAs });
+      }
+      const cautions = namesAnsweringElsewhere(names, [name], entry.id);
+      return { entry: await writeEntryChanges(transaction, run, entry, changes), cautions };
+    });
+  }
+
+  async setEntryVisibility(input: InputOf<'set_entry_visibility'>): Promise<EntryWritten> {
+    return this.writeEntry(input.entry, async (transaction, run, entry, names) => {
+      if (input.visibility === entry.visibility) throw new Refusal(`"${entry.name}" is ${entry.visibility} already, so nothing was changed.`);
+      // Every story read filters by the entry, so its facts, its trail and every pointer at it leave
+      // or come back with this one change, and nothing else is closed or moved. Turned open, it may
+      // now share a name with an entry a story made meanwhile, and the author is told so.
+      const cautions = input.visibility === 'open'
+        ? namesAnsweringElsewhere(names, [entry.name, ...entry.also_known_as], entry.id, (holder) => holder.visibility === 'open')
+        : [];
+      return { entry: await writeEntryChanges(transaction, run, entry, [{ field: 'visibility', earlier: entry.visibility, later: input.visibility }]), cautions };
+    });
+  }
+
   async importRun(run: ImportedRun): Promise<RunSnapshot> {
     await this.database.transaction().execute(async (transaction) => {
       const existing = await transaction.selectFrom('runs').select(['id', 'imported_through']).where('slug', '=', run.slug).executeTakeFirst();
@@ -242,6 +479,46 @@ export class PostgresStore implements Store {
     return { snapshot: await this.snapshotOf(run.slug, 'author'), removed };
   }
 
+  async exportRun(runSlug: string): Promise<RunExportDocument> {
+    return exportRunFrom(this.database, runSlug);
+  }
+
+  async restoreRun(document: RunExportDocument, options: { replace: boolean }): Promise<RestoredRunReport> {
+    return restoreRunInto(this.database, document, options);
+  }
+
+  /**
+   * Runs `work` in one transaction holding the lock on the run that owns the row with this id. An id
+   * of no such row, or text that is no id at all, is refused with `missing`.
+   */
+  private async writeInRunOf<Answer>(
+    table: TableOwnedByARun, id: string, missing: string,
+    work: (transaction: Kysely<Database>, run: RunRow) => Promise<Answer>,
+  ): Promise<Answer> {
+    if (!looksLikeAnId(id)) throw new Refusal(missing);
+    return this.database.transaction().execute(async (transaction) => {
+      const found = await transaction.selectFrom(table as 'facts').select('run_id').where('id', '=', id).executeTakeFirst();
+      if (found === undefined) throw new Refusal(missing);
+      const run = await transaction.selectFrom('runs').selectAll().where('id', '=', found.run_id).forUpdate().executeTakeFirstOrThrow();
+      return work(transaction, run);
+    });
+  }
+
+  /** Like writeInRunOf for an entry, handing over the entry and every entry of its run by name. */
+  private async writeEntry<Answer>(
+    entryId: string,
+    work: (transaction: Kysely<Database>, run: RunRow, entry: EntryRow, names: NameIndex<IndexedEntry>) => Promise<Answer>,
+  ): Promise<Answer> {
+    return this.writeInRunOf('entries', entryId, `There is no entry with the id "${entryId}".`, async (transaction, run) => {
+      const entry = await transaction.selectFrom('entries').selectAll().where('id', '=', entryId).executeTakeFirstOrThrow();
+      const names = await liveEntryIndex(transaction, run.id, 'author');
+      if (names.byId(entry.id) === null) {
+        throw new Refusal(`"${entry.name}" was introduced by a scene that has since been redone, and the new take took it back, so it is not changed.`);
+      }
+      return work(transaction, run, entry, names);
+    });
+  }
+
   private async writeInRun<Answer>(slug: string, work: (transaction: Kysely<Database>, run: RunRow) => Promise<Answer>): Promise<Answer> {
     return this.database.transaction().execute(async (transaction) => {
       const run = await transaction.selectFrom('runs').selectAll().where('slug', '=', slug).forUpdate().executeTakeFirst();
@@ -249,6 +526,92 @@ export class PostgresStore implements Store {
       return work(transaction, run);
     });
   }
+}
+
+type TableOwnedByARun = 'facts' | 'rulings' | 'waypoints' | 'threads' | 'entries';
+
+/** A write mark taken now, for a row the author changed in place, so it reads as written after an import. */
+const FRESH_WRITE_MARK = sql<never>`nextval(${WRITE_MARKS}::regclass)`;
+
+/**
+ * The newest standing scene, for an author's act that has to stop something at a scene. Refused
+ * where the run has none, as stating a fact over one already holding always was.
+ */
+async function newestSceneToStopAt(database: Kysely<Database>, run: RunRow, what: string): Promise<SceneRow> {
+  const newest = await newestStandingScene(database, run.id);
+  if (newest === undefined) throw new Refusal(`The run "${run.slug}" has no scene yet for ${what}. Save the first scene, then do this.`);
+  return newest;
+}
+
+/** Text the author gave, trimmed, refused where nothing is left of it. */
+function wordsGiven(text: string, what: string): string {
+  const trimmed = text.trim();
+  if (trimmed === '') throw new Refusal(`${what} needs some words; only spaces were given.`);
+  return trimmed;
+}
+
+/** Other names as kept: trimmed, empty ones dropped, each once (case-blind), in the order given. */
+function cleanNames(names: string[]): string[] {
+  const kept: string[] = [];
+  for (const name of names.map((each) => each.trim()).filter((each) => each !== '')) {
+    if (!kept.some((earlier) => normaliseName(earlier) === normaliseName(name))) kept.push(name);
+  }
+  return kept;
+}
+
+/** A sentence for each name that already answers to another entry, since a story naming it is then refused. */
+function namesAnsweringElsewhere(
+  names: NameIndex<IndexedEntry>, given: string[], exceptEntryId: string | null,
+  counts: (holder: IndexedEntry) => boolean = () => true,
+): string[] {
+  const cautions: string[] = [];
+  for (const name of given) {
+    const others = names.find(name).filter((holder) => holder.id !== exceptEntryId && counts(holder));
+    if (others.length === 0) continue;
+    cautions.push(`"${name}" also answers to ${others.map((other) => `"${other.name}" (id ${other.id})`).join(' and ')}. A story naming it will be refused until only one entry goes by it.`);
+  }
+  return cautions;
+}
+
+/**
+ * An entry a door names by its name or by its id: one of the two where `required`, at most one
+ * otherwise. Anything else is refused, since guessing between them would attach to the wrong entry.
+ */
+function entryNamedOrById(
+  names: NameIndex<IndexedEntry>, name: string | undefined, id: string | undefined, where: string, required: boolean,
+): IndexedEntry | null {
+  if (name !== undefined && id !== undefined) throw new Refusal(`Name the entry ${where} by its name or by its id, not both.`);
+  if (id !== undefined) {
+    const entry = names.byId(id);
+    if (entry === null) throw new Refusal(`This run has no entry with the id "${id}" (named ${where}).`);
+    return entry;
+  }
+  if (name !== undefined) return names.resolve(name, where);
+  if (required) throw new Refusal(`Name the entry ${where}, by its name or by its id.`);
+  return null;
+}
+
+interface EntryChange {
+  field: 'name' | 'alsoKnownAs' | 'pronoun' | 'kind' | 'visibility';
+  earlier: string | string[];
+  later: string | string[];
+}
+
+const ENTRY_COLUMN_BY_FIELD = {
+  name: 'name', alsoKnownAs: 'also_known_as', pronoun: 'pronoun', kind: 'kind', visibility: 'visibility',
+} as const;
+
+/** Writes changes to an entry, keeping each earlier value as an edit row. A list is kept as JSON. */
+async function writeEntryChanges(database: Kysely<Database>, run: RunRow, entry: EntryRow, changes: EntryChange[]): Promise<EntryRecord> {
+  const newest = await newestStandingScene(database, run.id);
+  const asText = (value: string | string[]): string => (Array.isArray(value) ? JSON.stringify(value) : value);
+  await database.insertInto('entry_edits').values(changes.map((change) => ({
+    id: randomUUID(), run_id: run.id, entry_id: entry.id, field: change.field,
+    earlier_value: asText(change.earlier), later_value: asText(change.later), after_scene_id: newest?.id ?? null,
+  }))).execute();
+  const update = Object.fromEntries(changes.map((change) => [ENTRY_COLUMN_BY_FIELD[change.field], change.later]));
+  const row = await database.updateTable('entries').set(update).where('id', '=', entry.id).returningAll().executeTakeFirstOrThrow();
+  return entryFromRow(row);
 }
 
 async function newestStandingScene(database: Kysely<Database>, runId: string): Promise<SceneRow | undefined> {
@@ -413,11 +776,16 @@ async function writeScene(database: Kysely<Database>, run: RunRow, input: SceneI
     }
     const takenBack = struck === null ? undefined : await entryTheStruckTakeIntroduced(database, struck.id, entryInput.name, entryInput.kind);
     if (takenBack !== undefined) {
+      // What the author changed by hand on the entry stays as the author left it: the take's input
+      // fills only the fields the author has not edited, so a redo takes none of the author's acts back.
+      const edited = takenBack.fieldsTheAuthorEdited;
       const revived = await database.updateTable('entries').set({
         introduced_in_scene_id: sceneId,
-        pronoun: entryInput.pronoun,
-        also_known_as: entryInput.alsoKnownAs.map((name) => name.trim()).filter((name) => name !== ''),
-      }).where('id', '=', takenBack.id).returningAll().executeTakeFirstOrThrow();
+        ...(edited.has('pronoun') ? {} : { pronoun: entryInput.pronoun }),
+        ...(edited.has('alsoKnownAs') ? {} : {
+          also_known_as: entryInput.alsoKnownAs.map((name) => name.trim()).filter((name) => name !== ''),
+        }),
+      }).where('id', '=', takenBack.row.id).returningAll().executeTakeFirstOrThrow();
       names.add(withNameFields(revived));
       entriesAdded.push(entryFromRow(revived));
       continue;
@@ -514,8 +882,16 @@ async function writeScene(database: Kysely<Database>, run: RunRow, input: SceneI
   for (const touching of input.threadsTouched) {
     const thread = await openThreadOfThisRun(database, run.id, touching.thread, 'touched');
     if (threadIdsTouched.includes(thread.id)) throw new Refusal(`The thread "${thread.text}" is touched twice in one scene. Name it once, with one note.`);
-    // A redo has already moved onto this take any touch an import dated to the scene it redoes; where
-    // the take touches the same thread, the take's own note and ownership replace it.
+    // A redo has already moved onto this take any touch an import or the author dated to the scene it
+    // redoes. The author's touch is kept as the author wrote it and the take's note is left out; an
+    // import's touch is replaced by the take's own note and ownership.
+    const authorsTouch = await database.selectFrom('thread_touches').select('note')
+      .where('thread_id', '=', thread.id).where('scene_id', '=', sceneId).where('by_author', '=', true).executeTakeFirst();
+    if (authorsTouch !== undefined) {
+      cautions.push(`The author touched the thread "${thread.text}" at this scene already, so the author's note was kept and this take's note was left out.`);
+      threadIdsTouched.push(thread.id);
+      continue;
+    }
     await database.insertInto('thread_touches')
       .values({ thread_id: thread.id, scene_id: sceneId, note: touching.note.trim(), written_by_scene_id: sceneId })
       .onConflict((conflict) => conflict.columns(['thread_id', 'scene_id']).doUpdateSet({ note: touching.note.trim(), written_by_scene_id: sceneId }))
@@ -552,7 +928,10 @@ async function writeScene(database: Kysely<Database>, run: RunRow, input: SceneI
 
   if (struck !== null) await settleEntriesTheStruckTakeIntroduced(database, struck.id);
 
-  const threadsAsTheyStand = await readThreadRecords(database, run.id, uniqueIds([...threadIdsOpened, ...threadIdsTouched, ...threadIdsClosed]));
+  // A save is a story's door, so its answer names only entries a story is served: a thread the
+  // author opened may be about an entry that is author-only now, and that id is left out.
+  const threadsAsTheyStand = (await readThreadRecords(database, run.id, uniqueIds([...threadIdsOpened, ...threadIdsTouched, ...threadIdsClosed])))
+    .map((thread) => ({ ...thread, aboutEntryIds: thread.aboutEntryIds.filter((id) => names.byId(id) !== null) }));
   const threadsIn = (ids: string[]): ThreadRecord[] => ids.map((id) => threadsAsTheyStand.find((thread) => thread.id === id)!);
   return {
     scene: sceneFromRow(sceneRow, readings),
@@ -584,14 +963,28 @@ async function openThreadOfThisRun(database: Kysely<Database>, runId: string, th
 /**
  * The entry the take being redone introduced under this very name and kind, which the new take
  * may take up again rather than make a second of. Only the redo of that scene revives, and only on
- * its primary name: an other name, another kind or a later scene makes a new entry, since the old
- * row's name and kind would otherwise come back unasked.
+ * the name and kind the take gave it: its primary name, or a name and kind it had before the author
+ * renamed it or changed its kind, since the take that gave it those is being redone. Any other name,
+ * another kind or a later scene makes a new entry, since the old row would otherwise come back
+ * unasked. An entry the author turned author-only is never revived, since a story cannot name it.
+ * The answer says which fields the author edited, so the revival leaves those as the author left them.
  */
-async function entryTheStruckTakeIntroduced(database: Kysely<Database>, struckId: string, name: string, kind: string): Promise<EntryRow | undefined> {
+async function entryTheStruckTakeIntroduced(
+  database: Kysely<Database>, struckId: string, name: string, kind: string,
+): Promise<{ row: EntryRow; fieldsTheAuthorEdited: Set<string> } | undefined> {
   const candidates = await database.selectFrom('entries').selectAll()
-    .where('introduced_in_scene_id', '=', struckId).where('visibility', '=', 'open').where('kind', '=', kind)
+    .where('introduced_in_scene_id', '=', struckId).where('visibility', '=', 'open')
     .orderBy('written_order', 'desc').execute();
-  return candidates.find((candidate) => normaliseName(candidate.name) === normaliseName(name));
+  for (const candidate of candidates) {
+    const edits = await database.selectFrom('entry_edits').select(['field', 'earlier_value'])
+      .where('entry_id', '=', candidate.id).execute();
+    const namesItWent = [candidate.name, ...edits.filter((edit) => edit.field === 'name').map((edit) => edit.earlier_value)];
+    const kindsItWas = [candidate.kind, ...edits.filter((edit) => edit.field === 'kind').map((edit) => edit.earlier_value)];
+    if (namesItWent.some((each) => normaliseName(each) === normaliseName(name)) && kindsItWas.includes(kind)) {
+      return { row: candidate, fieldsTheAuthorEdited: new Set(edits.map((edit) => edit.field)) };
+    }
+  }
+  return undefined;
 }
 
 /** Takes back everything one take's save established. See the comment at the head of the file. */
@@ -617,9 +1010,12 @@ async function strikeScene(database: Kysely<Database>, scene: SceneRow): Promise
   await database.updateTable('threads').set({ closed_in_scene_id: null, resolution: '', closed_by_scene_id: null })
     .where('closed_by_scene_id', '=', sceneId)
     .where(sql<boolean>`established_by_scene_id is distinct from ${sceneId}`).execute();
+  // A thread the take opened is closed at it, unless the author has closed it already: then it keeps
+  // the author's closing and resolution word for word. It reads as taken back either way, since it
+  // was opened in a struck scene.
   await database.updateTable('threads')
     .set({ closed_in_scene_id: sceneId, closed_by_scene_id: sceneId, resolution: `Taken back when scene ${scene.number} was redone.` })
-    .where('established_by_scene_id', '=', sceneId).execute();
+    .where('established_by_scene_id', '=', sceneId).where('closed_in_scene_id', 'is', null).execute();
   // Only what this scene's save reached is taken back. An import that only dated a waypoint here did
   // not reach it by this take, and it stays reached as of the new take.
   await database.updateTable('waypoints').set({ reached_in_scene_id: null, reached_by_scene_id: null })
@@ -638,17 +1034,32 @@ async function moveOutsideReferencesOntoTheNewTake(database: Kysely<Database>, s
   // A thread an import closed only dated to the struck scene was not closed by its save, so it stays
   // closed as of the new take. One the take closed or opened has been settled by strikeScene already,
   // and carries the struck scene as its closer, which is what this leaves alone.
+  // A thread the take opened stays wholly on the struck scene, the author's closing of it too.
   await database.updateTable('threads').set({ closed_in_scene_id: newId }).where('closed_in_scene_id', '=', struckId)
-    .where(sql<boolean>`closed_by_scene_id is distinct from ${struckId}`).execute();
-  // So is a touch an import dated to the struck scene: the take's save did not write it. The take's
-  // own touches stay on the struck scene, where they stop counting.
+    .where(sql<boolean>`closed_by_scene_id is distinct from ${struckId}`).where(notFromTheTake).execute();
+  // So is a touch an import or the author dated to the struck scene: the take's save did not write
+  // it. The take's own touches, and every touch on a thread the take opened, stay on the struck
+  // scene, where they stop counting.
   await database.updateTable('thread_touches').set({ scene_id: newId }).where('scene_id', '=', struckId)
-    .where(sql<boolean>`written_by_scene_id is distinct from ${struckId}`).execute();
+    .where(sql<boolean>`written_by_scene_id is distinct from ${struckId}`)
+    .where(sql<boolean>`not exists (select 1 from threads where threads.id = thread_touches.thread_id and threads.established_by_scene_id = ${struckId})`)
+    .execute();
+  // The author's acts dated to the struck scene (docs/decisions/0003-the-authors-hand.md) move onto
+  // the new take and none is taken back: a thread the author opened, a ruling or a waypoint the
+  // author withdrew, and the dates of what the author changed in place. A thread or ruling the
+  // take's own save wrote is left on the struck scene, where strikeScene has settled it.
+  await database.updateTable('threads').set({ opened_in_scene_id: newId }).where('opened_in_scene_id', '=', struckId).where(notFromTheTake).execute();
+  await database.updateTable('rulings').set({ withdrawn_in_scene_id: newId }).where('withdrawn_in_scene_id', '=', struckId).where(notFromTheTake).execute();
+  await database.updateTable('waypoints').set({ withdrawn_in_scene_id: newId }).where('withdrawn_in_scene_id', '=', struckId).execute();
+  for (const table of ['run_edits', 'entry_edits', 'waypoint_rewordings'] as const) {
+    await database.updateTable(table as 'run_edits').set({ after_scene_id: newId }).where('after_scene_id', '=', struckId).execute();
+  }
 }
 
 /**
  * An entry the struck take introduced and the new take did not is taken back with it, unless
- * something outside that take names it; then it stays, introduced by no scene.
+ * something outside that take names it, or the author has edited it by hand; then it stays,
+ * introduced by no scene, so the author's act on it is not taken back.
  */
 async function settleEntriesTheStruckTakeIntroduced(database: Kysely<Database>, struckId: string): Promise<void> {
   await sql`update entries set introduced_in_scene_id = null
@@ -664,5 +1075,6 @@ async function settleEntriesTheStruckTakeIntroduced(database: Kysely<Database>, 
         or exists (select 1 from scenes where scenes.place_entry_id = entries.id and scenes.id <> ${struckId})
         or exists (select 1 from collisions where (collisions.entry_id = entries.id or collisions.proposed_about_entry_id = entries.id)
                    and collisions.scene_id is distinct from ${struckId})
+        or exists (select 1 from entry_edits where entry_edits.entry_id = entries.id)
       )`.execute(database);
 }

@@ -127,14 +127,22 @@ test('"last seen" is brought up to the newest scene naming the entry, the hand-k
   assert.ok(run.unplaced.some((line) => /2 entries' "last seen" line was older/.test(line)));
 });
 
-test('a count written once in the Clock section is left out of the run, and its other sentences go to the setting under no label', () => {
+test('a count written once in the Clock section is left out of the run, the author\'s note in its bullet is a ruling, and no leftover becomes the setting', () => {
   const situation = run.scenes.at(-1)?.situationAfter ?? '';
   assert.equal(situation, 'The miller waits at the ford for the ferry (Scene 4).');
   assert.doesNotMatch(situation, /Elapsed|three days|Valley age/);
-  // The "Elapsed in run" label named the count that was left out, so what is left keeps no label.
-  assert.equal(run.setting, 'A valley\nNote (author, Scene 2): the ferry keeps no clock.\nValley age: some centuries since the mill was built');
-  for (const line of run.setting.split('\n')) assert.doesNotMatch(line, /^Elapsed in run:/);
+  // The setting is only what the caller gave; the leftovers are not where and when the run is set.
+  assert.equal(run.setting, 'A valley');
+  const note = run.rulings.find((ruling) => /ferry keeps no clock/.test(ruling.text));
+  assert.deepEqual(note, {
+    text: 'Note (author, Scene 2): the ferry keeps no clock.', source: 'author', scope: 'run',
+    topics: ['time'], about: [], scene: 2,
+  });
+  assert.ok(run.unplaced.some((line) => /"Valley age" line is neither the present, a clock, the zero of the days-after clock nor a note by the author/.test(line)));
   assert.ok(run.unplaced.some((line) => /a sentence of the Clock section's "Elapsed in run" line that carry a count on a kept clock were left out/.test(line)));
+  // The note that ends the "Elapsed in run" bullet is carried as a ruling, so the rest of that
+  // bullet, which is only its count, is not also said as a leftover that was not carried.
+  assert.ok(!run.unplaced.some((line) => /the rest of the Clock section's "Elapsed in run" line/.test(line)));
   for (const clock of run.clocks) assert.doesNotMatch(clock.countsFrom, /three days|day \+3 =/);
   // A count closing its sentence is still a count.
   const closing = readWeaverFiles({ log: '', cast: '', items: '', places: '', state: '# State\n\n## Clock\n- Mill clock: Mill Day 1 = the first flood.\n- Elapsed: the run is at Mill Day 9.\n' }, { slug: 'closing' });
@@ -188,31 +196,60 @@ function clockSectionAlone(lines: string, slug: string) {
   return readWeaverFiles({ log: '', cast: '', items: '', places: '', state: `# State\n\n## Clock\n${lines}\n` }, { slug });
 }
 
-test('a "Run began" line with no days-after clock to count from it goes to the setting, never dropped', () => {
+test('a "Run began" line with no days-after clock to count from it is said in the unplaced report, never the setting', () => {
   const read = clockSectionAlone('- Mill clock: Mill Day 1 = the day the ferry came.\n- Run began: the eve of the harvest', 'began-alone');
   assert.deepEqual(read.clocks.map((clock) => clock.name), ['Mill clock']);
-  assert.equal(read.setting, 'Run began: the eve of the harvest');
+  assert.equal(read.setting, '');
+  assert.ok(read.unplaced.some((line) => /line 5: the Clock section's "Run began" line was not carried, since no "day \+N" counts from it/.test(line)));
   // Where a days-after clock counts from it, the line describes that clock and is not said twice.
   const counted = clockSectionAlone('- Run began: the eve of the harvest\n- Note: scenes are stamped (harvest day +2).', 'began-counted');
   assert.match(counted.clocks.find((clock) => clock.name === 'harvest')?.countsFrom ?? '', /the eve of the harvest/);
   assert.doesNotMatch(counted.setting, /Run began/);
 });
 
-test('what is left of a Clock section bullet once its count is out is dropped to the unplaced report where it is only a fragment', () => {
+test('what is left of a Clock section bullet once its count is out, and any other leftover, goes to the unplaced report', () => {
   const read = clockSectionAlone('- Mill clock: Mill Day 1 = the first flood.\n- Elapsed: the run is at Mill Day 9. So far.\n- Pond: low since the dry spell began.', 'fragment');
-  assert.equal(read.setting, 'Pond: low since the dry spell began.');
-  assert.ok(read.unplaced.some((line) => /"Elapsed" line once its counts were left out was only a fragment/.test(line)));
-  // An untouched short bullet keeps its label and is no fragment: only a line that lost a count is weighed.
-  assert.equal(clockSectionAlone('- Pond: low.', 'short').setting, 'Pond: low.');
+  assert.equal(read.setting, '');
+  assert.ok(read.unplaced.some((line) => /line 5: the rest of the Clock section's "Elapsed" line is neither/.test(line)));
+  assert.ok(read.unplaced.some((line) => /line 6: the Clock section's "Pond" line is neither/.test(line)));
+  // A line that only says something is kept elsewhere is exactly what the store does not hold.
+  const elsewhere = clockSectionAlone('- Valley age: broad strokes only (kept in another file).', 'elsewhere');
+  assert.equal(elsewhere.setting, '');
+  assert.deepEqual(elsewhere.rulings, []);
+  assert.equal(elsewhere.unplaced.length, 1);
 });
 
-test('a Clock section line that is not a bullet is the present less its counts, and a countless bullet is the setting', () => {
+test('a Clock section bullet whose own label is a note by the author is a ruling, word for word, appended after the standing rulings', () => {
+  const read = readWeaverFiles({
+    log: '# The Mill\n\n## Scene 1: Grain\nThe miller grinds.\n\n## Scene 2: The ford\nThe ferry is late.\n',
+    cast: '', items: '', places: '',
+    state: [
+      '# State', '', '## Clock', '- Note (author, Scene 2): the ferry runs on its own hours.',
+      '- Note (author, Scene 9): the bell is never rung at night.', '- Note for the author: check the pond.', '',
+      '## Standing rulings', '- (Scene 1) The miller is never named on the page.', '- "Plain past tense."', '',
+    ].join('\n'),
+  }, { slug: 'notes' });
+  assert.deepEqual(read.rulings.map((ruling) => [ruling.text, ruling.source, ruling.scene, ruling.topics[0]]), [
+    ['(Scene 1) The miller is never named on the page.', 'story', 1, 'narration'],
+    ['"Plain past tense."', 'author', null, 'narration'],
+    ['Note (author, Scene 2): the ferry runs on its own hours.', 'author', 2, 'time'],
+    // Scene 9 is not in the log, so the note keeps no scene, and that is said.
+    ['Note (author, Scene 9): the bell is never rung at night.', 'author', null, 'time'],
+  ]);
+  assert.ok(read.unplaced.some((line) => /names scene 9, which the log does not have/.test(line)));
+  // A note left for the author is not the author's, so it is a leftover.
+  assert.ok(read.unplaced.some((line) => /"Note for the author" line is neither/.test(line)));
+  assert.equal(read.setting, '');
+});
+
+test('a Clock section line that is not a bullet is the present less its counts, and a countless bullet is unplaced, never the setting', () => {
   const read = readWeaverFiles({
     log: '# The Mill\n\n## Scene 1: Grain\nThe miller grinds.\n', cast: '', items: '', places: '',
     state: '# State\n\n## Clock\nThe mill is at day +9 now. The pond is low.\n- Weather: rain over the ford.\n- Elapsed: day +7 since the eve.\n',
   }, { slug: 'strays' });
   assert.equal(read.scenes.at(-1)?.situationAfter, 'The pond is low.');
-  assert.equal(read.setting, 'Weather: rain over the ford.');
+  assert.equal(read.setting, '');
+  assert.ok(read.unplaced.some((line) => /"Weather" line is neither/.test(line)));
   assert.ok(read.unplaced.some((line) => /a sentence of a Clock section line that carry a count on a kept clock were left out of the present/.test(line)));
   assert.ok(read.unplaced.some((line) => /"Elapsed" line that carry a count/.test(line)));
 });
@@ -227,8 +264,9 @@ test('a named clock\'s definition is neither a count written once nor the days-a
   // "Mill Day 1 = ..." defines the clock, so the sentence stays the named clock's own even where it says "relative to".
   assert.equal(read.clocks.find((clock) => clock.name === 'Mill clock')?.countsFrom, 'Mill Day 1 = the day the ferry came, counted relative to the flood.');
   assert.equal(read.clocks.find((clock) => clock.name === 'flood')?.countsFrom, 'Days after the eve of the flood, written "day +N".');
-  // And a definition in another bullet is no count, so it is kept as a standing line.
-  assert.equal(read.setting, 'Ferry note: Mill Day 1 = the first crossing.');
+  // And a definition in another bullet is no count, and no clock either, so it is said as a leftover.
+  assert.equal(read.setting, '');
+  assert.ok(read.unplaced.some((line) => /"Ferry note" line is neither/.test(line)));
 });
 
 test('a thread naming two clock counts is dated to the earliest scene that reads one', () => {
@@ -243,4 +281,31 @@ test('where two trail notes of one scene restate one property, the later written
   const ada = read.entries.find((entry) => entry.name === 'Ada Brook');
   const fromTheNotes = ada?.facts.filter((fact) => fact.property === 'last seen' && fact.fromScene === 2).map((fact) => fact.value);
   assert.deepEqual(fromTheNotes, ['Scene 2, the landing']);
+});
+
+test('an author\'s note merely mentioned inside a sentence is no ruling, and the count in that sentence is still left out', () => {
+  const read = readWeaverFiles({
+    log: '# The Mill\n\n## Scene 1: Grain\nThe miller grinds.\n', cast: '', items: '', places: '',
+    state: [
+      '# State', '', '## Clock', '- Run began: the eve of the flood.',
+      "- Elapsed in run: the run is at day +9 (see the author's note: it drifts).",
+      "- Elapsed again: the run is at day +9, see the author's note: it drifts.", '',
+    ].join('\n'),
+  }, { slug: 'mentioned' });
+  assert.deepEqual(read.rulings, []);
+  for (const [lineNumber, label] of [[5, 'Elapsed in run'], [6, 'Elapsed again']] as const) {
+    assert.ok(read.unplaced.some((line) => line.startsWith(`state.md line ${lineNumber}: a sentence of the Clock section's "${label}" line that carry a count on a kept clock were left out`)), label);
+  }
+});
+
+test('a note by the author whose label holds a colon inside its parenthesis keeps its scene', () => {
+  const read = readWeaverFiles({
+    log: '# The Mill\n\n## Scene 1: Grain\nThe miller grinds.\n\n## Scene 2: The ford\nThe ferry is late.\n',
+    cast: '', items: '', places: '',
+    state: '# State\n\n## Clock\n- Note (author, Scene 2: at the ford): the ferry keeps no clock.\n- Elapsed in run: three quiet days. Note (author, Scene 2: at the ford): the bell is silent.\n',
+  }, { slug: 'colon' });
+  assert.deepEqual(read.rulings.map((ruling) => [ruling.text, ruling.scene]), [
+    ['Note (author, Scene 2: at the ford): the ferry keeps no clock.', 2],
+    ['Note (author, Scene 2: at the ford): the bell is silent.', 2],
+  ]);
 });

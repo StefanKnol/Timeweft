@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readWeaverFiles } from './index.ts';
 import { factsOfLabelledBullet } from './read-entries.ts';
 import { summaryOf, SUMMARY_LIMIT_CHARACTERS } from './read-log.ts';
-import { closureOfThread } from './read-state.ts';
+import { closureOfThread, statesNoSceneToReach } from './read-state.ts';
 import { splitStackedHistoryDated } from './text-helpers.ts';
 import type { WeaverFiles } from '@timeweft/contract';
 
@@ -100,6 +100,27 @@ test('a waypoint that says it was played, reached or done in a scene is reached'
   assert.deepEqual(run.waypoints.map((waypoint) => waypoint.reached), [true, true, true, false, false]);
 });
 
+test('a waypoint bullet that states no scene to reach is not a waypoint, and one that opens on an attribution still is', () => {
+  const run = runOfState(`# State
+
+## Authored waypoints
+- (Author, Scene 2) The miller and the baker meet at the ford at dusk.
+- (held by the author; kept out of the narration)
+- *(kept elsewhere)*.
+- (the bell rings) The ferry comes back.
+`);
+  assert.deepEqual(run.waypoints.map((waypoint) => waypoint.text), [
+    '(Author, Scene 2) The miller and the baker meet at the ford at dusk.',
+    '(the bell rings) The ferry comes back.',
+  ]);
+  const said = run.unplaced.filter((line) => /only a note that the waypoint is held outside the files, was not carried/.test(line));
+  assert.deepEqual(said.map((line) => /line (\d+)/.exec(line)?.[1]), ['5', '6']);
+  // No door adds a waypoint to a run that has begun, so the report does not send the author to one.
+  for (const line of said) assert.doesNotMatch(line, /can be added in the app/);
+  assert.equal(statesNoSceneToReach('(Scene 4) Reach the mill.'), false);
+  assert.equal(statesNoSceneToReach('   '), true);
+});
+
 test('a summary is about 320 characters of whole sentences', () => {
   assert.equal(SUMMARY_LIMIT_CHARACTERS, 320);
   const sentence = 'The miller carries the sack of barley down to the ford in the rain. ';
@@ -109,4 +130,38 @@ test('a summary is about 320 characters of whole sentences', () => {
   const long = summaryOf('word '.repeat(300));
   assert.ok(long.length <= 324);
   assert.match(long, / \.\.\.$/);
+});
+
+test('a waypoint written wholly in parentheses is still a waypoint, unless its parentheses say it is held outside the files', () => {
+  for (const real of [
+    '(The miller meets the baker at the ford at dusk.)',
+    '(The miller (and the baker) meet at the ford.)',
+    '("The ferry is late," the miller says.)',
+    '~~(The miller crosses the ford.)~~',
+    '(the miller meets the baker at dusk)',
+  ]) assert.equal(statesNoSceneToReach(real), false, real);
+  const run = runOfState(`# State
+
+## Authored waypoints
+- (The miller meets the baker at the ford at dusk.)
+- ~~(The miller crosses the ford.)~~
+`);
+  assert.deepEqual(run.waypoints, [
+    { text: '(The miller meets the baker at the ford at dusk.)', reached: false },
+    { text: '~~(The miller crosses the ford.)~~', reached: true },
+  ]);
+});
+
+test('the held-outside-the-files note is read in its near shapes too', () => {
+  for (const placeholder of [
+    '(held author-side; kept out of narration)',
+    '(held author-side) (kept out of narration)',
+    '(held author-side; kept out of narration) \u2026',
+    '(held author-side; kept out of narration) (see notes)',
+    '[held author-side; kept out of narration]',
+    'Waypoint 1: (held author-side; kept out of narration)',
+  ]) assert.equal(statesNoSceneToReach(placeholder), true, placeholder);
+  // A waypoint beside a note that it is held stays a waypoint: its scene is written in the files.
+  assert.equal(statesNoSceneToReach('(The miller meets the baker.) (held by the author)'), false);
+  assert.equal(statesNoSceneToReach('Waypoint 1: the miller meets the baker.'), false);
 });
