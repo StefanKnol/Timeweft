@@ -23,8 +23,8 @@ export interface RunningServer {
   port: number;
   /** Calls one operation over HTTP with the token, and answers with the status and parsed body. */
   call(name: string, input: unknown): Promise<{ status: number; body: { ok: boolean; answer?: unknown; refusal?: string } }>;
-  /** A connected MCP client, with the token. */
-  mcpClient(): Promise<Client>;
+  /** A connected MCP client, with the access token, or with another token given (the story token). */
+  mcpClient(token?: string): Promise<Client>;
   stop(): Promise<void>;
 }
 
@@ -50,10 +50,10 @@ export async function startServerForTests(options: { webRoot?: string | null; ac
       });
       return { status: response.status, body: await response.json() as { ok: boolean; answer?: unknown; refusal?: string } };
     },
-    async mcpClient() {
+    async mcpClient(token = TEST_TOKEN) {
       const client = new Client({ name: 'a-story-chat', version: '0.0.0' });
       const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
-        requestInit: { headers: { authorization: `Bearer ${TEST_TOKEN}` } },
+        requestInit: { headers: { authorization: `Bearer ${token}` } },
       });
       await client.connect(transport);
       clients.push(client);

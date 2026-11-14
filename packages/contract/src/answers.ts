@@ -139,8 +139,13 @@ export interface SceneSearchMatch {
 export interface SceneSearchResult {
   /** Newest scene first, at most the limit asked for. */
   matches: SceneSearchMatch[];
-  /** How many scenes hold the text in all, the ones past the limit included. */
+  /**
+   * How many takes hold the text in all, the ones past the limit included. A scene redone has more
+   * than one take, so this can be more than the scenes that hold it.
+   */
   total: number;
+  /** How many scenes hold the text in all: the takes counted once for each scene number. */
+  scenesMatched: number;
 }
 
 /**

@@ -68,12 +68,15 @@ export function excerptAround(fieldText: string, matchStart: number, matchLength
   }
   const leading = start > 0 ? ELLIPSIS : '';
   const trailing = end < text.length ? ELLIPSIS : '';
-  const body = text.slice(start, end);
-  const trimmedBody = body.replace(/^ +/u, '');
-  const trimmedAtStart = body.length - trimmedBody.length;
+  // Spaces at either end of the excerpt are dropped, but never the match's own: text searched for
+  // may start or end with spaces, and the offsets must still point at all of it.
+  let bodyStart = start;
+  while (bodyStart < matchStart && text[bodyStart] === ' ') bodyStart += 1;
+  let bodyEnd = end;
+  while (bodyEnd > matchEnd && text[bodyEnd - 1] === ' ') bodyEnd -= 1;
   return {
-    excerpt: `${leading}${trimmedBody.replace(/ +$/u, '')}${trailing}`,
-    matchStart: leading.length + matchStart - start - trimmedAtStart,
+    excerpt: `${leading}${text.slice(bodyStart, bodyEnd)}${trailing}`,
+    matchStart: leading.length + matchStart - bodyStart,
     matchLength,
   };
 }
@@ -105,5 +108,5 @@ export async function searchScenesIn(database: Kysely<Database>, input: InputOf<
     // differently). The scene is still a match; its summary is shown, with no match marked.
     return { sceneId: row.id, number: row.number, status: row.status as SceneStatus, title: row.title, field: 'summary', ...excerptAround(row.summary, 0, 0) };
   });
-  return { matches, total: rows.length };
+  return { matches, total: rows.length, scenesMatched: new Set(rows.map((row) => row.number)).size };
 }

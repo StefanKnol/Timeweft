@@ -13,7 +13,7 @@
  * as history rows. Those are the author's: a story reads each thing as it is now.
  */
 import type { Kysely } from 'kysely';
-import type { ClockReading, RunOutline, RunSnapshot, ThreadRecord } from '@timeweft/contract';
+import type { ClockReading, RunOutline, RunSnapshot, SceneEditOutline, SceneEditRecord, ThreadRecord } from '@timeweft/contract';
 import type { Database } from './database.ts';
 import { normaliseName } from './names.ts';
 import {
@@ -175,12 +175,24 @@ export function wordsIn(text: string): number {
 }
 
 /**
- * The author's whole run with each scene's record left out and its length in words given instead.
- * Every other part of the snapshot is passed on as it is.
+ * A change to a scene as the run page reads it: a change to the record carries the length of each
+ * side in words instead of the prose; a change to any other field is passed on as it is.
+ */
+export function outlineOfSceneEdit(edit: SceneEditRecord): SceneEditOutline {
+  if (edit.field !== 'record') return { ...edit, field: edit.field };
+  const { earlierValue, laterValue, ...rest } = edit;
+  return { ...rest, field: 'record', earlierWords: wordsIn(earlierValue), laterWords: wordsIn(laterValue) };
+}
+
+/**
+ * The author's whole run with the prose left out: each scene's record, given as its length in words,
+ * and both sides of every change to a record, given the same way. Every other part of the snapshot is
+ * passed on as it is.
  */
 export function outlineOfSnapshot(snapshot: RunSnapshot): RunOutline {
   return {
     ...snapshot,
     scenes: snapshot.scenes.map(({ record, ...rest }) => ({ ...rest, recordWords: wordsIn(record) })),
+    sceneEdits: snapshot.sceneEdits.map(outlineOfSceneEdit),
   };
 }

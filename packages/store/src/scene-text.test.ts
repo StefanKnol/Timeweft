@@ -115,9 +115,10 @@ test('a search leaves struck takes out unless they are asked for', async () => {
   await store.redoScene(redoInput({ run: slug, number: 1, title: 'The weir holds', record: 'It held.' }));
 
   const standingOnly = await store.searchScenes(searchInput({ run: slug, text: 'broke' }));
-  assert.deepEqual(standingOnly, { matches: [], total: 0 });
+  assert.deepEqual(standingOnly, { matches: [], total: 0, scenesMatched: 0 });
   const withStruck = await store.searchScenes(searchInput({ run: slug, text: 'broke', includeStruck: true }));
   assert.equal(withStruck.total, 1);
+  assert.equal(withStruck.scenesMatched, 1);
   assert.equal(withStruck.matches[0]!.status, 'struck');
   assert.equal(withStruck.matches[0]!.title, 'The weir');
 });
@@ -129,7 +130,18 @@ test('a search honours its limit and still counts every match', async () => {
   }
   const result = await store.searchScenes(searchInput({ run: slug, text: 'baker', limit: 2 }));
   assert.equal(result.total, 5);
+  assert.equal(result.scenesMatched, 5);
   assert.deepEqual(result.matches.map((match) => match.number), [5, 4]);
+});
+
+test('a scene whose standing and struck takes both hold the words counts once among the scenes and twice among the takes', async () => {
+  const slug = await freshRun();
+  await store.saveScene(sceneInput({ run: slug, title: 'The lamp', record: 'She poured the lantern oil.' }));
+  await store.redoScene(redoInput({ run: slug, number: 1, title: 'The lamp again', record: 'He spilled the lantern oil.' }));
+  await store.saveScene(sceneInput({ run: slug, title: 'The ford', record: 'Lantern oil on the water.' }));
+  const result = await store.searchScenes(searchInput({ run: slug, text: 'lantern oil', includeStruck: true }));
+  assert.equal(result.total, 3);
+  assert.equal(result.scenesMatched, 2);
 });
 
 test('a search reads %, _ and \\ as themselves', async () => {
@@ -159,4 +171,40 @@ test('an excerpt of a short field is the whole field, and the match offset is ke
   const lineBroken = excerptAround('First line.\nThe miller sang.', 16, 6);
   assert.equal(lineBroken.excerpt, 'First line. The miller sang.');
   assert.equal(lineBroken.excerpt.slice(lineBroken.matchStart, lineBroken.matchStart + 6), 'miller');
+});
+
+test('an excerpt never trims away the spaces a match starts or ends with, so its offsets point at all of it', () => {
+  // A record starting with a line break and an indented line, searched for text starting with spaces.
+  const atTheStart = excerptAround('\n  the miller crossed the ford', 1, 5);
+  assert.equal(atTheStart.excerpt.slice(atTheStart.matchStart, atTheStart.matchStart + atTheStart.matchLength), '  the');
+  assert.ok(atTheStart.matchStart >= 0);
+  const fromTheVeryStart = excerptAround('\n  the miller crossed the ford', 0, 6);
+  assert.deepEqual(fromTheVeryStart, { excerpt: '   the miller crossed the ford', matchStart: 0, matchLength: 6 });
+  // A match ending in spaces at the end of the field.
+  const atTheEnd = excerptAround('the miller crossed the ford  ', 22, 7);
+  assert.ok(atTheEnd.matchStart + atTheEnd.matchLength <= atTheEnd.excerpt.length);
+  assert.equal(atTheEnd.excerpt.slice(atTheEnd.matchStart, atTheEnd.matchStart + 7), ' ford  ');
+  // Spaces that are not the match's are still trimmed.
+  assert.deepEqual(excerptAround('  the miller  ', 2, 3), { excerpt: 'the miller', matchStart: 0, matchLength: 3 });
+});
+
+test("the outline gives a change to a record as each side's length in words, never the prose", async () => {
+  const slug = await freshRun();
+  const saved = await store.saveScene(sceneInput({ run: slug, title: 'The mill', record: 'The miller ground the barley.' }));
+  await store.editScene(OPERATIONS.edit_scene.input.parse({
+    run: slug, sceneId: saved.scene.id, record: 'The miller ground the last of the barley at dusk.', title: 'The mill at dusk',
+  }));
+  const outline = await store.outlineOf(slug);
+  const recordEdit = outline.sceneEdits.find((edit) => edit.field === 'record');
+  assert.ok(recordEdit !== undefined && recordEdit.field === 'record');
+  assert.equal(recordEdit.earlierWords, 5);
+  assert.equal(recordEdit.laterWords, 10);
+  assert.ok(!('earlierValue' in recordEdit) && !('laterValue' in recordEdit), 'a record edit carries the prose');
+  assert.doesNotMatch(JSON.stringify(outline), /barley/, 'the outline carries the prose somewhere');
+  const titleEdit = outline.sceneEdits.find((edit) => edit.field === 'title');
+  assert.ok(titleEdit !== undefined && titleEdit.field !== 'record');
+  assert.deepEqual([titleEdit.earlierValue, titleEdit.laterValue], ['The mill', 'The mill at dusk'], 'a change to another field keeps both values');
+  // The whole snapshot, which resume and export read, keeps both sides of the record whole.
+  const whole = await store.snapshotOf(slug, 'author');
+  assert.equal(whole.sceneEdits.find((edit) => edit.field === 'record')!.earlierValue, 'The miller ground the barley.');
 });

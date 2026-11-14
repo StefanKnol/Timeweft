@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { RunOutline, SceneOutline, SceneText } from '@timeweft/contract';
 import { AuthorOnlyMark, KeptText } from './marks.tsx';
 import { useCallOperation, type Loaded } from './calling.tsx';
-import { hashOfRoute, heldSpanInWords, readingsWithClockNames, sceneNumbersById, whatASceneEstablished } from './shaping.ts';
+import { hashOfRoute, heldSpanInWords, readingsWithClockNames, recordVersionOf, sceneNumbersById, whatASceneEstablished } from './shaping.ts';
 
 export function SceneReader({ scene, snapshot }: { scene: SceneOutline; snapshot: RunOutline }) {
   const headingReference = useRef<HTMLHeadingElement>(null);
@@ -39,11 +39,11 @@ export function SceneReader({ scene, snapshot }: { scene: SceneOutline; snapshot
       </dl>
       <h4>Summary</h4>
       <KeptText text={scene.summary} emptyWords="No summary." />
-      <h4>Record{scene.recordWords > 0 && <span className="quiet"> ({wordCountInWords(scene.recordWords)})</span>}</h4>
-      <SceneRecordText runSlug={snapshot.run.slug} scene={scene} />
+      <h4>The scene{scene.recordWords > 0 && <span className="quiet"> ({wordCountInWords(scene.recordWords)})</span>}</h4>
+      <SceneRecordText runSlug={snapshot.run.slug} scene={scene} recordVersion={recordVersionOf(scene.id, snapshot.sceneEdits)} />
       <h4>Steer</h4>
       <KeptText text={scene.steer} emptyWords="The author steered nothing at this scene." />
-      <h4>Where things stood after</h4>
+      <h4>Where things stood after it</h4>
       <KeptText text={scene.situationAfter} emptyWords="Not said." />
 
       <h4>What it established</h4>
@@ -126,14 +126,19 @@ export function SceneReader({ scene, snapshot }: { scene: SceneOutline; snapshot
 }
 
 /**
- * Records already fetched in this visit to the page, by run and take. A take's record never
- * changes under its id, so it is fetched once and kept until the page is reloaded.
+ * Records already fetched in this visit to the page, by run, take and version. The author can
+ * change a take's record under the same id (edit_scene), so the key also holds the newest change
+ * to that record (`recordVersionOf`): once the run is read again after an edit, the key is new and
+ * the text is fetched again. Until then, a record is fetched once and kept until the page is reloaded.
  */
 const recordsFetched = new Map<string, string>();
 
-function recordKey(runSlug: string, sceneId: string): string {
-  return `${runSlug}\u0000${sceneId}`;
+function recordKey(runSlug: string, sceneId: string, recordVersion: string): string {
+  return `${runSlug}\u0000${sceneId}\u0000${recordVersion}`;
 }
+
+/** What the page says where a take holds no prose of its own. */
+const NOTHING_BEYOND_THE_SUMMARY = 'Nothing beyond the summary.';
 
 /** "1 word", "1,204 words". */
 function wordCountInWords(count: number): string {
@@ -144,9 +149,9 @@ function wordCountInWords(count: number): string {
  * The record of one take, fetched when the scene opens: the run is read without the scenes' prose,
  * so the prose is one request away. A take whose record is empty is never fetched.
  */
-function SceneRecordText({ runSlug, scene }: { runSlug: string; scene: SceneOutline }) {
+function SceneRecordText({ runSlug, scene, recordVersion }: { runSlug: string; scene: SceneOutline; recordVersion: string }) {
   const callOperation = useCallOperation();
-  const key = recordKey(runSlug, scene.id);
+  const key = recordKey(runSlug, scene.id, recordVersion);
   const alreadyFetched = recordsFetched.get(key);
   const [loaded, setLoaded] = useState<Loaded<SceneText>>({ state: 'loading' });
 
@@ -166,11 +171,11 @@ function SceneRecordText({ runSlug, scene }: { runSlug: string; scene: SceneOutl
     };
   }, [callOperation, runSlug, scene.id, scene.recordWords, key]);
 
-  if (scene.recordWords === 0) return <KeptText text="" emptyWords="No record beyond the summary." />;
-  if (alreadyFetched !== undefined) return <KeptText text={alreadyFetched} emptyWords="No record beyond the summary." />;
+  if (scene.recordWords === 0) return <KeptText text="" emptyWords={NOTHING_BEYOND_THE_SUMMARY} />;
+  if (alreadyFetched !== undefined) return <KeptText text={alreadyFetched} emptyWords={NOTHING_BEYOND_THE_SUMMARY} />;
   // The answer is checked against the take shown, so the take opened before never shows here.
-  if (loaded.state === 'answer' && loaded.answer.sceneId === scene.id) return <KeptText text={loaded.answer.record} emptyWords="No record beyond the summary." />;
+  if (loaded.state === 'answer' && loaded.answer.sceneId === scene.id) return <KeptText text={loaded.answer.record} emptyWords={NOTHING_BEYOND_THE_SUMMARY} />;
   if (loaded.state === 'loading' || loaded.state === 'answer') return <p className="quiet" role="status">Loading the scene…</p>;
   if (loaded.state === 'refusal') return <p className="refusal" role="alert">{loaded.message}</p>;
-  return <p className="refusal" role="alert">The record could not be read: {loaded.message}</p>;
+  return <p className="refusal" role="alert">The scene’s text could not be read: {loaded.message}</p>;
 }

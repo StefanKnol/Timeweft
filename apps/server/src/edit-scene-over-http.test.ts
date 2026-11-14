@@ -61,7 +61,7 @@ test('an edit over the web answers the scene as it stands, and a refusal is a 40
   assert.equal(onStruck.body.refusal, `A struck take is kept as it was; edit the standing take of scene ${struck.number}.`);
 });
 
-test('edit_scene is refused for a story caller, is not an MCP tool, and the story token cannot reach it', async () => {
+test('edit_scene is refused for a story caller, and is not an MCP tool, over the access token or the story token', async () => {
   assert.throws(() => parseOperationInput('edit_scene', { run: SLUG, sceneId: 'x', title: 'y' }, 'story'), /edit_scene is the author's alone/);
   assert.ok(!STORY_TOOL_NAMES.includes('edit_scene'));
   const client = await running.mcpClient();
@@ -69,14 +69,16 @@ test('edit_scene is refused for a story caller, is not an MCP tool, and the stor
   assert.ok(!tools.some((tool) => tool.name === 'edit_scene'));
   const result = await client.callTool({ name: 'edit_scene', arguments: { run: SLUG, sceneId: 'x', title: 'y' } });
   assert.equal(result.isError, true);
+  // The story token opens no web route at all, so a 401 there would say nothing about edit_scene.
+  // Its one door is MCP, and what edit_scene's audience decides is that it is not offered there.
   const withStoryToken = await startServerForTests({ storyToken: 'a-story-token-for-the-edited-valley' });
   try {
-    const answer = await fetch(`${withStoryToken.baseUrl}/api/operations/edit_scene`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer a-story-token-for-the-edited-valley' },
-      body: JSON.stringify({ run: SLUG, sceneId: 'x', title: 'y' }),
-    });
-    assert.equal(answer.status, 401);
+    const storyClient = await withStoryToken.mcpClient('a-story-token-for-the-edited-valley');
+    const offered = await storyClient.listTools();
+    assert.ok(offered.tools.some((tool) => tool.name === 'save_scene'), 'the story connection offers its own tools');
+    assert.ok(!offered.tools.some((tool) => tool.name === 'edit_scene'), 'edit_scene is offered to the story token');
+    const overStory = await storyClient.callTool({ name: 'edit_scene', arguments: { run: SLUG, sceneId: 'x', title: 'y' } });
+    assert.equal(overStory.isError, true);
   } finally {
     await withStoryToken.stop();
   }

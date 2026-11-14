@@ -119,7 +119,12 @@ test('every refusal changes nothing', async () => {
   await assert.rejects(store.editScene(editInput({ run: slug, sceneId: firstId })), refusedWith(/^Nothing given differs from what scene 1 holds/));
   await assert.rejects(store.editScene(editInput({ run: slug, sceneId: firstId, title: 'Flour at dusk', starred: false })), refusedWith(/^Nothing given differs/));
   await assert.rejects(store.editScene(editInput({ run: slug, sceneId: firstId, title: '   ' })), refusedWith(/A title needs some words/));
-  await assert.rejects(store.editScene(editInput({ run: slug, sceneId: firstId, title: '' })), refusedWith(/A title needs some words/));
+  await assert.rejects(store.editScene(editInput({ run: slug, sceneId: firstId, title: '' })), refusedWith(/A title needs some words; none were given/));
+  // Every resume reads these, so a blank one is refused as a blank title is; the record and steer may be empty.
+  await assert.rejects(store.editScene(editInput({ run: slug, sceneId: firstId, summary: '' })), refusedWith(/^A summary needs some words/));
+  await assert.rejects(store.editScene(editInput({ run: slug, sceneId: firstId, summary: ' \n ' })), refusedWith(/^A summary needs some words; only spaces/));
+  await assert.rejects(store.editScene(editInput({ run: slug, sceneId: firstId, whenTyped: '' })), refusedWith(/^When it happens needs some words/));
+  await assert.rejects(store.editScene(editInput({ run: slug, sceneId: firstId, situationAfter: '  ' })), refusedWith(/^Where things stand after the scene needs some words/));
   const otherPlace = (await authorView(other.slug)).entries.find((entry) => entry.name === 'the mill')!;
   await assert.rejects(store.editScene(editInput({ run: slug, sceneId: firstId, placeEntryId: otherPlace.id })), refusedWith(/no entry with the id .* for the scene to be set at/));
   await assert.rejects(store.editScene(editInput({ run: slug, sceneId: firstId, placeEntryId: 'the mill' })), refusedWith(/no entry with the id "the mill"/));
@@ -252,4 +257,22 @@ test('an import with a scene edit after it is not replaced', async () => {
   await store.editScene(editInput({ run: slug, sceneId: snapshot.scenes[0]!.id, starred: true }));
   await assert.rejects(store.replaceImportedRun({ ...imported, title: 'The Weir, corrected' }), (error: unknown) =>
     error instanceof EarlierImportStandsInTheWay && /1 change to a saved scene\./.test(error.message));
+});
+
+test('the record and the steer may be emptied, and a summary given with spaces around it is kept trimmed', async () => {
+  const { slug, firstId } = await runOfTwoScenes();
+  const edited = await store.editScene(editInput({ run: slug, sceneId: firstId, record: '', steer: '', summary: '  The miller ground at dusk.  ' }));
+  assert.equal(edited.scene.record, '');
+  assert.equal(edited.scene.steer, '');
+  assert.equal(edited.scene.summary, 'The miller ground at dusk.');
+});
+
+test('a save refuses a summary, when or situation of only spaces, which the schema lets through', async () => {
+  const { slug } = await runOfTwoScenes();
+  const before = await authorView(slug);
+  await assert.rejects(store.saveScene(sceneInput({ run: slug, summary: '   ' })), refusedWith(/^A summary needs some words; only spaces/));
+  await assert.rejects(store.saveScene(sceneInput({ run: slug, when: ' ' })), refusedWith(/^When it happens needs some words/));
+  await assert.rejects(store.saveScene(sceneInput({ run: slug, situationAfter: '\n' })), refusedWith(/^Where things stand after the scene needs some words/));
+  await assert.rejects(store.saveScene(sceneInput({ run: slug, title: '  ' })), refusedWith(/^A title needs some words/));
+  assert.deepEqual(await authorView(slug), before);
 });

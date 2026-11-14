@@ -12,7 +12,7 @@ import { readLocalText, useRememberedScroll } from './useSectionState.ts';
 import {
   NO_SCENE_LIST_FILTERS, SCENES_SHOWN_AT_A_TIME, excerptAroundMatch, hashOfRoute, hashOfScene, lastReadStorageKey, newestStandingScene,
   orderedForDrawing, sceneChipCounts, sceneCountInWords, sceneFromItemId, sceneListIsNarrowed, sceneNumberFromText, sceneNumbersById,
-  sceneSlotsMatchingFilters, scenesByNumber, scenesInvolvingEntry, searchedFieldInWords, shownAfterShowingOlder, textSearchAppliesTo, textSearchFindsFor,
+  sceneSlotsMatchingFilters, scenesByNumber, scenesInvolvingEntry, searchedFieldInWords, shownAfterShowingOlder, textSearchAppliesTo, textSearchFindsFor, textSearchInWords,
   type SceneListState, type SceneSlot,
 } from './shaping.ts';
 
@@ -109,7 +109,7 @@ export function SceneList({ snapshot, state, setState }: {
     const outcome = await callOperation('search_scenes', { run: runSlug, text, includeStruck: true, limit: TEXT_SEARCH_LIMIT });
     setTextSearchRunning(false);
     if (outcome.kind === 'answer') {
-      setState((current) => ({ ...current, textSearch: { text, matches: outcome.answer.matches, total: outcome.answer.total } }));
+      setState((current) => ({ ...current, textSearch: { text, matches: outcome.answer.matches, total: outcome.answer.total, scenesMatched: outcome.answer.scenesMatched } }));
     } else if (outcome.kind === 'refusal') {
       setTextSearchRefusal(outcome.refusal);
     } else if (outcome.kind === 'fault') {
@@ -236,7 +236,7 @@ export function SceneList({ snapshot, state, setState }: {
           <p className="quiet scene-count" role="status">
             {sceneCountInWords(slots.length, matching.length, drawn.shown.length, narrowed)}
             {state.textSearch !== null && textSearchAppliesTo(state) && (
-              <>. {textSearchInWords(state.textSearch.total, state.textSearch.matches.length)}</>
+              <>. {textSearchInWords(state.textSearch)}</>
             )}
           </p>
           <div className="order-switch" role="group" aria-label="Order">
@@ -278,12 +278,6 @@ export function SceneList({ snapshot, state, setState }: {
       )}
     </>
   );
-}
-
-/** What the count line adds once the store has searched the scenes' text for the words typed. */
-function textSearchInWords(total: number, listed: number): string {
-  const found = total === 0 ? 'The scenes’ text was searched too; no scene holds the words.' : `The scenes’ text was searched too: ${total === 1 ? '1 scene holds' : `${total} scenes hold`} the words.`;
-  return total > listed ? `${found} Only the newest ${listed} of them are counted here.` : found;
 }
 
 function SceneRow({ slot, runSlug, marked, textFinds, struckOpen, onStruckToggled }: {

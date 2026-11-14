@@ -11,7 +11,7 @@ import {
 } from '@timeweft/contract';
 import type {
   ClockReading, ClockRecord, CollisionRecord, EntryKind, EntryNoteRecord, EntryRecord, FactRecord,
-  EntryEditRecord, Id, ImportedRunReport, RestoredRunReport, RunExportDocument, RunExportRowCounts, RunExportTableName, JourneyLegRecord, RequestOf, RulingRecord, RulingScope, RunEditRecord, RunOutline, RunStatus, SceneOutline, SceneSearchMatch, SearchedSceneField, ThreadRecord, Visibility, WaypointRecord, WireAnswer,
+  EntryEditRecord, Id, ImportedRunReport, RestoredRunReport, RunExportDocument, RunExportRowCounts, RunExportTableName, JourneyLegRecord, RequestOf, RulingRecord, RulingScope, RunEditRecord, RunOutline, RunStatus, SceneEditOutline, SceneOutline, SceneSearchMatch, SearchedSceneField, ThreadRecord, Visibility, WaypointRecord, WireAnswer,
 } from '@timeweft/contract';
 
 // ---------------------------------------------------------------------------------------------
@@ -336,7 +336,7 @@ export interface SceneListState extends SceneListFilters {
   /** The scene numbers whose struck takes the author opened. */
   openStruckNumbers: number[];
   /** The text the store's search of the scenes' text was last asked, and what it found. */
-  textSearch: { text: string; matches: SceneSearchMatch[]; total: number } | null;
+  textSearch: { text: string; matches: SceneSearchMatch[]; total: number; scenesMatched: number } | null;
   /** The scene number last opened from the list, whose row is brought back into view on return. */
   returnToNumber: number | null;
 }
@@ -362,7 +362,8 @@ export function sceneListStateFromStored(value: unknown): SceneListState {
   const textSearchIsWellFormed = typeof textSearch === 'object' && textSearch !== null
     && typeof (textSearch as Record<string, unknown>).text === 'string'
     && Array.isArray((textSearch as Record<string, unknown>).matches)
-    && typeof (textSearch as Record<string, unknown>).total === 'number';
+    && typeof (textSearch as Record<string, unknown>).total === 'number'
+    && typeof (textSearch as Record<string, unknown>).scenesMatched === 'number';
   return {
     searchText: typeof stored.searchText === 'string' ? stored.searchText : '',
     starredOnly: stored.starredOnly === true,
@@ -394,16 +395,43 @@ export function excerptAroundMatch(match: Pick<SceneSearchMatch, 'excerpt' | 'ma
 }
 
 const SEARCHED_FIELD_IN_WORDS: Record<SearchedSceneField, string> = {
-  title: 'title',
-  summary: 'summary',
+  title: 'the title',
+  summary: 'the summary',
   record: 'the scene',
-  steer: 'steer',
-  situationAfter: 'where things stood after',
+  steer: 'the steer',
+  situationAfter: 'where things stood after it',
 };
 
-/** Where in a scene the store's search found the words. */
+/** Where in a scene the store's search found the words, read after "In": "In the steer". */
 export function searchedFieldInWords(field: SearchedSceneField): string {
   return SEARCHED_FIELD_IN_WORDS[field];
+}
+
+/**
+ * What the count line adds once the store has searched the scenes' text for the words typed. The
+ * store answers one match per take, so a scene redone can be found twice; the sentence counts
+ * scenes, by number, and so does its note on the limit.
+ */
+export function textSearchInWords(textSearch: { matches: readonly SceneSearchMatch[]; total: number; scenesMatched: number }): string {
+  const scenesFound = textSearch.scenesMatched;
+  const found = scenesFound === 0
+    ? 'The scenes’ text was searched too; no scene holds the words.'
+    : `The scenes’ text was searched too: ${scenesFound === 1 ? '1 scene holds' : `${scenesFound} scenes hold`} the words.`;
+  if (textSearch.total <= textSearch.matches.length) return found;
+  const scenesListed = new Set(textSearch.matches.map((match) => match.number)).size;
+  return `${found} Only the newest ${scenesListed === 1 ? '1 of them is' : `${scenesListed} of them are`} counted here.`;
+}
+
+/**
+ * Which version of a take's record the page holds: the id of the newest change the author made to
+ * that take's record, or the empty string where it was never changed. The record is fetched one
+ * take at a time and kept for the visit, so it is kept under this as well as the take's id: an edit
+ * to the record changes it, and the text is then fetched again.
+ */
+export function recordVersionOf(sceneId: Id, sceneEdits: readonly Pick<SceneEditOutline, 'id' | 'sceneId' | 'field'>[]): string {
+  let newest = '';
+  for (const edit of sceneEdits) if (edit.sceneId === sceneId && edit.field === 'record') newest = edit.id;
+  return newest;
 }
 
 // ---------------------------------------------------------------------------------------------

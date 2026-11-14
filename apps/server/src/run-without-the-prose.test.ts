@@ -32,12 +32,28 @@ async function answerOf<Answer>(name: string, input: unknown): Promise<Answer> {
 }
 
 test('read_run answers the run without any record, and is under half the size of the whole snapshot', async () => {
+  // An edit to a record keeps both sides of the prose in its history row; that must not travel either.
+  const second = (await running.store.snapshotOf(SLUG, 'author')).scenes.find((scene) => scene.status === 'standing' && scene.number === 2)!;
+  await answerOf('edit_scene', { run: SLUG, sceneId: second.id, record: `${second.record}\nThe miller latched the sluice gate behind him.` });
   const outline = await answerOf<RunOutline>('read_run', { run: SLUG });
   const whole = await running.store.snapshotOf(SLUG, 'author');
   assert.equal(outline.scenes.length, whole.scenes.length);
   for (const scene of outline.scenes) {
     assert.ok(!('record' in scene), `scene ${scene.number} carries its record`);
     assert.equal(typeof scene.recordWords, 'number');
+  }
+  const recordEdits = whole.sceneEdits.filter((edit) => edit.field === 'record');
+  assert.ok(recordEdits.length > 0, 'a record was edited');
+  for (const edit of outline.sceneEdits.filter((each) => each.field === 'record')) {
+    assert.ok(!('earlierValue' in edit) && !('laterValue' in edit), 'a record edit carries the prose');
+    assert.equal(typeof edit.earlierWords, 'number');
+  }
+  const outlineText = JSON.stringify(outline);
+  for (const edit of recordEdits) {
+    for (const prose of [edit.earlierValue, edit.laterValue]) {
+      const longestLine = prose.split('\n').sort((left, right) => right.length - left.length)[0]!;
+      assert.ok(!outlineText.includes(longestLine), `the outline carries a record edit's prose: "${longestLine.slice(0, 40)}…"`);
+    }
   }
   const wordsInEachRecord = whole.scenes.map((scene) => scene.record.split(/\s+/).filter((word) => word !== '').length);
   assert.deepEqual(outline.scenes.map((scene) => scene.recordWords), wordsInEachRecord);
@@ -89,16 +105,18 @@ test('the three author reads are refused for a story caller and are not MCP tool
   }
 });
 
-test('the story token reaches none of the three over the web', async () => {
+test('over the story token, the one door it opens (MCP), none of the three is offered or answers', async () => {
+  // The story token opens no web route at all, whatever the operation, so a 401 there says nothing
+  // about these three. What their audience decides is what the story's MCP connection offers.
   const withStoryToken = await startServerForTests({ storyToken: 'a-story-token-for-the-short-valley' });
   try {
+    const storyClient = await withStoryToken.mcpClient('a-story-token-for-the-short-valley');
+    const { tools } = await storyClient.listTools();
+    assert.ok(tools.some((tool) => tool.name === 'resume_run'), 'the story connection offers its own tools');
     for (const name of AUTHOR_READS) {
-      const answer = await fetch(`${withStoryToken.baseUrl}/api/operations/${name}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: 'Bearer a-story-token-for-the-short-valley' },
-        body: JSON.stringify({ run: SLUG }),
-      });
-      assert.equal(answer.status, 401, `the story token reached ${name}`);
+      assert.ok(!tools.some((tool) => tool.name === name), `${name} is offered to the story token`);
+      const result = await storyClient.callTool({ name, arguments: { run: SLUG, sceneId: 'x', text: 'mill' } });
+      assert.equal(result.isError, true, `${name} answered the story token`);
     }
   } finally {
     await withStoryToken.stop();

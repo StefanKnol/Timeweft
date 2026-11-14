@@ -9,7 +9,7 @@ import {
   FRESH_SCENE_LIST_STATE, NO_SCENE_LIST_FILTERS, SCENES_SHOWN_AT_A_TIME, entryPickerCountInWords, entryPickerOptions, excerptAroundMatch,
   hashOfScene, listOrderFromStored, normaliseForMatching, orderStorageKey, orderedForDrawing, sceneChipCounts, sceneCountInWords,
   sceneFromItemId, sceneItemIdOf, sceneListIsNarrowed, sceneListStateFromStored, sceneNotFoundInWords, sceneNumberFromText,
-  sceneNumbersById, sceneSlotsMatchingFilters, scenesByNumber, scenesInvolvingEntry, scenesMatching, textSearchAppliesTo, textSearchFindsFor,
+  sceneNumbersById, sceneSlotsMatchingFilters, scenesByNumber, scenesInvolvingEntry, scenesMatching, recordVersionOf, searchedFieldInWords, textSearchAppliesTo, textSearchFindsFor, textSearchInWords,
   titleOfRoute,
 } from './shaping.ts';
 
@@ -194,7 +194,7 @@ test('a take found in the scenes\' text matches its number, but only for the wor
   assert.deepEqual(sceneSlotsMatchingFilters(slots, filters, index).map((slot) => slot.number), []);
   assert.deepEqual(sceneSlotsMatchingFilters(slots, filters, index, new Set(['scene-2'])).map((slot) => slot.number), [2]);
 
-  const textSearch = { text: 'Lantern Oil', total: 1, matches: [{ sceneId: 'scene-2', number: 2, status: 'standing' as const, title: 'Crossing 2', field: 'record' as const, excerpt: 'filled with lantern oil.', matchStart: 12, matchLength: 11 }] };
+  const textSearch = { text: 'Lantern Oil', total: 1, scenesMatched: 1, matches: [{ sceneId: 'scene-2', number: 2, status: 'standing' as const, title: 'Crossing 2', field: 'record' as const, excerpt: 'filled with lantern oil.', matchStart: 12, matchLength: 11 }] };
   assert.equal(textSearchAppliesTo({ searchText: 'lantern oil', textSearch }), true);
   assert.deepEqual([...textSearchFindsFor({ searchText: 'lantern oil', textSearch }).keys()], ['scene-2']);
   assert.equal(textSearchAppliesTo({ searchText: 'lantern', textSearch }), false);
@@ -226,6 +226,9 @@ test('what the list keeps for the tab is read back with care', () => {
   assert.equal(kept.textSearch, null);
   assert.equal(kept.returnToNumber, 388);
   assert.equal(sceneListStateFromStored({ shownCount: 3 }).shownCount, SCENES_SHOWN_AT_A_TIME);
+  // A search kept before the scenes were counted apart from the takes is dropped, not miscounted.
+  assert.equal(sceneListStateFromStored({ textSearch: { text: 'ford', matches: [], total: 2 } }).textSearch, null);
+  assert.deepEqual(sceneListStateFromStored({ textSearch: { text: 'ford', matches: [], total: 2, scenesMatched: 1 } }).textSearch, { text: 'ford', matches: [], total: 2, scenesMatched: 1 });
 });
 
 test('a number typed into "Go to scene" is a whole number from 1', () => {
@@ -274,4 +277,39 @@ test('the entry picker matches other names, ranks names that begin with the text
   assert.equal(entryPickerCountInWords(limited), '4 entries match. The first 2 are listed; type more to narrow them.');
   assert.equal(entryPickerCountInWords(entryPickerOptions(entries, 'oswin', new Map())), '1 entry matches.');
   assert.equal(entryPickerCountInWords(entryPickerOptions(entries, 'weir', new Map())), 'No entry matches.');
+});
+
+function findIn(sceneId: string, number: number, status: 'standing' | 'struck' = 'standing') {
+  return { sceneId, number, status, title: `Crossing ${number}`, field: 'record' as const, excerpt: 'lantern oil', matchStart: 0, matchLength: 11 };
+}
+
+test('the text search line counts scenes, not takes, so a scene found in two takes counts once', () => {
+  // Scene 7 holds the words in its standing take and in a struck one.
+  const twoTakesOfOneScene = { matches: [findIn('take-7b', 7), findIn('take-7a', 7, 'struck')], total: 2, scenesMatched: 1 };
+  assert.equal(textSearchInWords(twoTakesOfOneScene), 'The scenes’ text was searched too: 1 scene holds the words.');
+  assert.equal(textSearchInWords({ matches: [], total: 0, scenesMatched: 0 }), 'The scenes’ text was searched too; no scene holds the words.');
+  // Past the limit, the note counts the scenes among the takes listed.
+  const pastTheLimit = { matches: [findIn('take-9', 9), findIn('take-8b', 8), findIn('take-8a', 8, 'struck')], total: 5, scenesMatched: 4 };
+  assert.equal(textSearchInWords(pastTheLimit), 'The scenes’ text was searched too: 4 scenes hold the words. Only the newest 2 of them are counted here.');
+  assert.equal(textSearchInWords({ matches: [findIn('take-9', 9)], total: 3, scenesMatched: 3 }), 'The scenes’ text was searched too: 3 scenes hold the words. Only the newest 1 of them is counted here.');
+});
+
+test('each searched field reads as a whole phrase after "In"', () => {
+  assert.deepEqual(
+    (['title', 'summary', 'record', 'steer', 'situationAfter'] as const).map((field) => `In ${searchedFieldInWords(field)}:`),
+    ['In the title:', 'In the summary:', 'In the scene:', 'In the steer:', 'In where things stood after it:'],
+  );
+});
+
+test("a take's record version is its newest record edit, so an edited record is fetched again", () => {
+  const edits = [
+    { id: 'edit-1', sceneId: 'take-200', field: 'record' as const },
+    { id: 'edit-2', sceneId: 'take-200', field: 'title' as const },
+    { id: 'edit-3', sceneId: 'take-201', field: 'record' as const },
+    { id: 'edit-4', sceneId: 'take-200', field: 'record' as const },
+  ];
+  assert.equal(recordVersionOf('take-200', edits), 'edit-4');
+  assert.equal(recordVersionOf('take-200', edits.slice(0, 3)), 'edit-1');
+  assert.equal(recordVersionOf('take-202', edits), '', 'a record never changed has no version');
+  assert.notEqual(recordVersionOf('take-200', edits.slice(0, 1)), recordVersionOf('take-200', edits), 'an edit gives a new version');
 });

@@ -156,6 +156,22 @@ export interface SceneEditRecord {
   createdAt: string;
 }
 
+/**
+ * A change to a saved scene as the author's run page reads it. A change to any field but the record
+ * carries both values, as `SceneEditRecord` does. A change to the record (the prose) carries the
+ * length of each side in words instead, for the reason `SceneOutline` leaves the record out: the
+ * prose is most of a run, and both sides of every edit to it would travel on every load.
+ */
+export type SceneEditOutline =
+  | (SceneEditRecord & { field: Exclude<SceneFieldTheAuthorEdits, 'record'> })
+  | (Omit<SceneEditRecord, 'earlierValue' | 'laterValue'> & {
+    field: 'record';
+    /** How many words the record held before the change. */
+    earlierWords: number;
+    /** How many words it held after it. */
+    laterWords: number;
+  });
+
 export const ENTRY_KINDS = ['person', 'group', 'place', 'item', 'other'] as const;
 export type EntryKind = (typeof ENTRY_KINDS)[number];
 
@@ -426,10 +442,13 @@ export interface RunSnapshot {
 }
 
 /**
- * A whole run as the author's run page reads it: the snapshot with each scene's record left out,
- * since the prose is most of a run and is read one scene at a time.
+ * A whole run as the author's run page reads it: the snapshot with the scenes' prose left out, since
+ * the prose is most of a run and is read one scene at a time. The prose is left out twice over: each
+ * scene's record, and both sides of every change made to a record.
  */
-export interface RunOutline extends Omit<RunSnapshot, 'scenes'> {
+export interface RunOutline extends Omit<RunSnapshot, 'scenes' | 'sceneEdits'> {
   /** Every scene, struck ones included, by number and then by time written, without its record. */
   scenes: SceneOutline[];
+  /** Every change the author made to a saved scene, oldest first, a change to a record given in words counted. */
+  sceneEdits: SceneEditOutline[];
 }

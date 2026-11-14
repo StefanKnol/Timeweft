@@ -317,7 +317,7 @@ test('an author adds an entry introduced by no scene, with a caution where the n
   assert.deepEqual(written.cautions, []);
   const twin = await store.addEntry(inputOf('add_entry', { run: slug, name: 'The Mill', kind: 'group' }));
   assert.equal(twin.cautions.length, 1);
-  assert.match(twin.cautions[0]!, /"The Mill" also answers to "the mill"/);
+  assert.match(twin.cautions[0]!, /^Another entry, "the mill" \(id [^)]+\), already goes by "The Mill"\. A story naming it will be refused/);
   const secret = await store.addEntry(inputOf('add_entry', { run: slug, name: 'the drowned bell', kind: 'item', visibility: 'author-only' }));
   assert.ok((await authorView(slug)).entries.some((each) => each.id === secret.entry.id));
   assert.ok(!(await storyView(slug)).entries.some((each) => each.id === secret.entry.id));
@@ -360,7 +360,7 @@ test('a renamed entry is still found by its old name, and the change is kept', a
   assert.deepEqual(back.entry.alsoKnownAs, ['Odo Fenwright']);
   await assert.rejects(store.renameEntry(inputOf('rename_entry', { entry: odo, name: 'odo the miller' })), refusedSaying(/called "odo the miller" already/));
   const caution = await store.renameEntry(inputOf('rename_entry', { entry: odo, name: 'the ferry' }));
-  assert.match(caution.cautions[0]!, /"the ferry" also answers to "the ferry"/);
+  assert.match(caution.cautions[0]!, /^Another entry, "the ferry" \(id [^)]+\), already goes by "the ferry"\./);
 });
 
 test('turning an entry author-only takes it, its facts, its trail and every pointer at it out of the story view, and back', async () => {
@@ -566,7 +566,7 @@ test('an entry turned author-only, its scene redone, then turned open again come
   const opened = await store.setEntryVisibility(inputOf('set_entry_visibility', { entry: lantern, visibility: 'open' }));
   assert.ok((await storyView(slug)).entries.some((entry) => entry.id === lantern));
   assert.equal(opened.cautions.length, 1);
-  assert.match(opened.cautions[0]!, /"the lantern" also answers to/);
+  assert.match(opened.cautions[0]!, /^Another entry, "the lantern" \(id [^)]+\), already goes by "the lantern"\./);
 });
 
 test('turning an entry open again says so when a story has since made another of the same name', async () => {
@@ -576,7 +576,7 @@ test('turning an entry open again says so when a story has since made another of
   assert.deepEqual(hidden.cautions, []);
   await store.saveScene(sceneInput({ run: slug, entries: [{ name: 'the ferry', kind: 'item' }] }));
   const opened = await store.setEntryVisibility(inputOf('set_entry_visibility', { entry: ferry, visibility: 'open' }));
-  assert.match(opened.cautions.join(' '), /"the ferry" also answers to/);
+  assert.match(opened.cautions.join(' '), /Another entry, "the ferry" \(id [^)]+\), already goes by "the ferry"\./);
 });
 
 test("a redo touching a thread the author touched at that scene keeps the author's note, through a second redo too", async () => {

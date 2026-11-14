@@ -8,7 +8,7 @@
  * text). How many entries match is said in a status line a screen reader reads out. Picked entries
  * are shown as chips, each removed by its own button.
  */
-import { useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { EntryRecord, Id } from '@timeweft/contract';
 import { AuthorOnlyMark } from './marks.tsx';
 import { entryPickerCountInWords, entryPickerOptions, entryToldApartInWords } from './shaping.ts';
@@ -39,6 +39,7 @@ export function EntryPicker({ label, entries, sceneNumbers, pickedIds, onChange,
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const inputReference = useRef<HTMLInputElement>(null);
+  const listReference = useRef<HTMLUListElement>(null);
 
   const offer = useMemo(
     () => entryPickerOptions(entries, typed, sceneNumbers, { pickedIds, leaveOutAuthorOnly }),
@@ -48,6 +49,14 @@ export function EntryPicker({ label, entries, sceneNumbers, pickedIds, onChange,
   const picked = pickedIds.map((id) => entriesById.get(id)).filter((entry): entry is EntryRecord => entry !== undefined);
   const optionId = (index: number) => `${baseId}-option-${index}`;
   const activeOption = open && activeIndex >= 0 && activeIndex < offer.options.length ? offer.options[activeIndex] : undefined;
+
+  // Focus stays in the text box, so the browser never scrolls the list to follow the active option.
+  // The list is a scroll box of its own: bring the active option into its view on every step.
+  useEffect(() => {
+    if (!open || activeIndex < 0) return;
+    const option = listReference.current?.children[activeIndex];
+    if (option instanceof HTMLElement) option.scrollIntoView({ block: 'nearest' });
+  }, [open, activeIndex]);
 
   const pick = (entryId: Id) => {
     onChange(multiple ? [...pickedIds, entryId] : [entryId]);
@@ -145,7 +154,7 @@ export function EntryPicker({ label, entries, sceneNumbers, pickedIds, onChange,
             setActiveIndex(-1);
           }}
         />
-        <ul id={listId} role="listbox" aria-label={`Entries for “${label}”`} className="entry-picker-list" hidden={!open || offer.options.length === 0}>
+        <ul ref={listReference} id={listId} role="listbox" aria-label={`Entries for “${label}”`} className="entry-picker-list" hidden={!open || offer.options.length === 0}>
           {offer.options.map((option, index) => (
             <li
               key={option.entryId}

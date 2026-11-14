@@ -813,14 +813,19 @@ test('settling a collision asks a question naming both values', () => {
 
 test('a caution naming entries that share a name tells them apart in words, with no id in it', () => {
   const snapshot = demoSnapshot();
-  const caution = '"the miller" also answers to "the miller" (id miller) and "the ferry" (id ferry). A story naming it will be refused until only one entry goes by it.';
+  // As the store writes it: the other entries first, told apart, then the name they share.
+  const caution = 'Other entries, "the miller" (id miller) and "the ferry" (id ferry), already go by "the miller". A story naming it will be refused until only one entry goes by it.';
   const said = cautionInWords(caution, snapshot);
   assert.equal(
     said,
-    '\u201cthe miller\u201d also answers to \u201cthe miller\u201d (a person, first named at scene 1) and \u201cthe ferry\u201d (a place, named before the scenes). A story naming it will be refused until only one entry goes by it.',
+    'Other entries, \u201cthe miller\u201d (a person, first named at scene 1) and \u201cthe ferry\u201d (a place, named before the scenes), already go by \u201cthe miller\u201d. A story naming it will be refused until only one entry goes by it.',
   );
   assert.doesNotMatch(said, /\bid\b|miller\)|ferry\)/);
-  assert.doesNotMatch(cautionInWords('"x" also answers to "y" (id gone).', snapshot), /\(id /);
+  assert.equal(
+    cautionInWords('Another entry, "the miller" (id miller), already goes by "the miller". A story naming it will be refused until only one entry goes by it.', snapshot),
+    'Another entry, \u201cthe miller\u201d (a person, first named at scene 1), already goes by \u201cthe miller\u201d. A story naming it will be refused until only one entry goes by it.',
+  );
+  assert.doesNotMatch(cautionInWords('Another entry, "y" (id gone), already goes by "x".', snapshot), /\(id /);
 });
 
 test('a history line says the day and time of day it was written', () => {

@@ -495,8 +495,15 @@ export class PostgresStore implements Store {
         throw new Refusal(`A struck take is kept as it was; edit the standing take of scene ${scene.number}.`);
       }
       const given: Record<TextFieldOfAScene, string | undefined> = {
+        // Every resume reads the summary, and the newest scene's situation as where things stand, so
+        // those may not be blanked, any more than a title. The record and the steer may be empty, as
+        // they may be on save.
         title: input.title === undefined ? undefined : wordsGiven(input.title, 'A title'),
-        summary: input.summary, whenTyped: input.whenTyped, record: input.record, steer: input.steer, situationAfter: input.situationAfter,
+        summary: input.summary === undefined ? undefined : wordsGiven(input.summary, 'A summary'),
+        whenTyped: input.whenTyped === undefined ? undefined : wordsGiven(input.whenTyped, 'When it happens'),
+        record: input.record,
+        steer: input.steer,
+        situationAfter: input.situationAfter === undefined ? undefined : wordsGiven(input.situationAfter, 'Where things stand after the scene'),
       };
       const changes: SceneChange[] = [];
       for (const field of SCENE_FIELDS_THE_AUTHOR_EDITS) {
@@ -613,7 +620,7 @@ async function newestSceneToStopAt(database: Kysely<Database>, run: RunRow, what
 /** Text the author gave, trimmed, refused where nothing is left of it. */
 function wordsGiven(text: string, what: string): string {
   const trimmed = text.trim();
-  if (trimmed === '') throw new Refusal(`${what} needs some words; only spaces were given.`);
+  if (trimmed === '') throw new Refusal(`${what} needs some words; ${text === '' ? 'none were given' : 'only spaces were given'}.`);
   return trimmed;
 }
 
@@ -635,7 +642,9 @@ function namesAnsweringElsewhere(
   for (const name of given) {
     const others = names.find(name).filter((holder) => holder.id !== exceptEntryId && counts(holder));
     if (others.length === 0) continue;
-    cautions.push(`"${name}" also answers to ${others.map((other) => `"${other.name}" (id ${other.id})`).join(' and ')}. A story naming it will be refused until only one entry goes by it.`);
+    const othersNamed = others.map((other) => `"${other.name}" (id ${other.id})`).join(' and ');
+    const whoElse = others.length === 1 ? `Another entry, ${othersNamed}, already goes` : `Other entries, ${othersNamed}, already go`;
+    cautions.push(`${whoElse} by "${name}". A story naming it will be refused until only one entry goes by it.`);
   }
   return cautions;
 }
@@ -905,9 +914,10 @@ async function writeScene(database: Kysely<Database>, run: RunRow, input: SceneI
 
   const place = input.place === undefined ? null : names.resolve(input.place, 'as the place of the scene');
   const sceneRow = await database.insertInto('scenes').values({
-    id: sceneId, run_id: run.id, number, title: input.title, starred: input.starred, when_typed: input.when,
-    place_entry_id: place?.id ?? null, summary: input.summary, record: input.record, steer: input.steer,
-    situation_after: input.situationAfter, status: 'standing',
+    id: sceneId, run_id: run.id, number, title: wordsGiven(input.title, 'A title'), starred: input.starred,
+    when_typed: wordsGiven(input.when, 'When it happens'), place_entry_id: place?.id ?? null,
+    summary: wordsGiven(input.summary, 'A summary'), record: input.record, steer: input.steer,
+    situation_after: wordsGiven(input.situationAfter, 'Where things stand after the scene'), status: 'standing',
   }).returningAll().executeTakeFirstOrThrow();
   if (struck !== null) await moveOutsideReferencesOntoTheNewTake(database, struck.id, sceneId);
   if (readings.length > 0) {
