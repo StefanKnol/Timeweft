@@ -5,12 +5,12 @@ import type { Selectable } from 'kysely';
 import type {
   ClockReading, ClockRecord, CollisionRecord, CollisionState, EntryEditRecord, EntryFieldTheAuthorEdits,
   EntryKind, EntryNoteRecord, EntryRecord, FactRecord, JourneyLegRecord, RulingRecord, RulingScope,
-  RunEditRecord, RunFieldTheAuthorEdits, RunRecord, RunStatus, SceneRecord, SceneStatus, Source,
+  RunEditRecord, RunFieldTheAuthorEdits, RunRecord, RunStatus, SceneEditRecord, SceneFieldTheAuthorEdits, SceneRecord, SceneStatus, Source,
   ThreadRecord, Visibility, WaypointRecord, WaypointRewordingRecord,
 } from '@timeweft/contract';
 import type {
   ClocksTable, CollisionsTable, EntriesTable, EntryEditsTable, EntryNotesTable, FactsTable, JourneyLegsTable,
-  RulingsTable, RunEditsTable, RunsTable, ScenesTable, ThreadsTable, WaypointRewordingsTable, WaypointsTable,
+  RulingsTable, RunEditsTable, RunsTable, SceneEditsTable, ScenesTable, ThreadsTable, WaypointRewordingsTable, WaypointsTable,
 } from './database.ts';
 
 export type RunRow = Selectable<RunsTable>;
@@ -141,6 +141,14 @@ export function runEditFromRow(row: Selectable<RunEditsTable>): RunEditRecord {
 export function entryEditFromRow(row: Selectable<EntryEditsTable>): EntryEditRecord {
   return {
     id: row.id, runId: row.run_id, entryId: row.entry_id, field: row.field as EntryFieldTheAuthorEdits,
+    earlierValue: row.earlier_value, laterValue: row.later_value, afterSceneId: row.after_scene_id,
+    createdAt: asText(row.created_at),
+  };
+}
+
+export function sceneEditFromRow(row: Selectable<SceneEditsTable>): SceneEditRecord {
+  return {
+    id: row.id, runId: row.run_id, sceneId: row.scene_id, field: row.field as SceneFieldTheAuthorEdits,
     earlierValue: row.earlier_value, laterValue: row.later_value, afterSceneId: row.after_scene_id,
     createdAt: asText(row.created_at),
   };

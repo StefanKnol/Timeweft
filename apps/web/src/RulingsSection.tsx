@@ -1,15 +1,15 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { RULING_SCOPES } from '@timeweft/contract';
-import type { RulingRecord, RunSnapshot } from '@timeweft/contract';
-import { ActMessage, ConfirmingButton, useAct, type Act } from './authoring.tsx';
+import type { RulingRecord, RunOutline } from '@timeweft/contract';
+import { ActMessage, ConfirmingButton, itemElementId, useAct, useScrollToShownItem, type Act } from './authoring.tsx';
 import {
-  RULINGS_SHOWN_AT_A_TIME, entriesARulingMayName, lastingActInWords, rulingToSend, rulingsSplitByWithdrawal, rulingsToDraw,
+  RULINGS_SHOWN_AT_A_TIME, entriesARulingMayName, hashOfRoute, lastingActInWords, rulingToSend, rulingsSplitByWithdrawal, rulingsToDraw,
   sceneNumbersById, shownAfterShowingOlder, whyAnActNeedsAScene, type RulingForm,
 } from './shaping.ts';
 
 const EMPTY_RULING_FORM: RulingForm = { text: '', scope: 'run', topicsText: '', aboutEntryIds: [] };
 
-export function RulingsSection({ snapshot, readAgain }: { snapshot: RunSnapshot; readAgain: () => void }) {
+export function RulingsSection({ snapshot, shownItemId, readAgain }: { snapshot: RunOutline; shownItemId: string | null; readAgain: () => void }) {
   const [filterText, setFilterText] = useState('');
   const [shownCount, setShownCount] = useState(RULINGS_SHOWN_AT_A_TIME);
   const [showingWithdrawn, setShowingWithdrawn] = useState(false);
@@ -19,6 +19,17 @@ export function RulingsSection({ snapshot, readAgain }: { snapshot: RunSnapshot;
   const withdrawnMatching = rulingsToDraw(withdrawn, filterText, withdrawn.length).shown;
   // One act for every withdrawal, kept here because a withdrawn ruling leaves the list it was in.
   const withdrawal = useAct(readAgain);
+  // A link to a withdrawn ruling opens the history it is kept in.
+  const shownIsWithdrawn = shownItemId !== null && withdrawn.some((ruling) => ruling.id === shownItemId);
+  useEffect(() => {
+    if (shownIsWithdrawn) setShowingWithdrawn(true);
+  }, [shownIsWithdrawn]);
+  useScrollToShownItem(shownItemId);
+  const cardProperties = (ruling: RulingRecord, struck: boolean) => ({
+    id: itemElementId(ruling.id),
+    tabIndex: -1,
+    className: ['card', struck ? 'struck' : '', ruling.id === shownItemId ? 'item-shown' : ''].filter((name) => name !== '').join(' '),
+  });
   return (
     <>
       <AddRulingForm snapshot={snapshot} readAgain={readAgain} />
@@ -37,7 +48,7 @@ export function RulingsSection({ snapshot, readAgain }: { snapshot: RunSnapshot;
         {newest.matchingCount} of {inForce.length} rulings in force
         {newest.olderNotShown > 0 && `, the newest ${newest.shown.length} drawn`}
       </p>
-      <ActMessage actState={withdrawal.actState} doneWords="Withdrawn. It is kept under the history below." />
+      <ActMessage actState={withdrawal.actState} />
       {newest.olderNotShown > 0 && (
         <p>
           <button type="button" onClick={() => setShownCount(shownAfterShowingOlder(shownCount, RULINGS_SHOWN_AT_A_TIME, newest.matchingCount))}>
@@ -47,7 +58,7 @@ export function RulingsSection({ snapshot, readAgain }: { snapshot: RunSnapshot;
       )}
       <ol className="plain-list">
         {newest.shown.map((ruling) => (
-          <li key={ruling.id} className="card"><RulingCard ruling={ruling} snapshot={snapshot} withdrawal={withdrawal} /></li>
+          <li key={ruling.id} {...cardProperties(ruling, false)}><RulingCard ruling={ruling} snapshot={snapshot} withdrawal={withdrawal} /></li>
         ))}
       </ol>
       {withdrawn.length > 0 && (
@@ -61,7 +72,7 @@ export function RulingsSection({ snapshot, readAgain }: { snapshot: RunSnapshot;
           {showingWithdrawn && (
             <ol className="plain-list" aria-label="Withdrawn rulings">
               {withdrawnMatching.map((ruling) => (
-                <li key={ruling.id} className="card struck"><RulingCard ruling={ruling} snapshot={snapshot} withdrawal={withdrawal} /></li>
+                <li key={ruling.id} {...cardProperties(ruling, true)}><RulingCard ruling={ruling} snapshot={snapshot} withdrawal={withdrawal} /></li>
               ))}
             </ol>
           )}
@@ -71,7 +82,7 @@ export function RulingsSection({ snapshot, readAgain }: { snapshot: RunSnapshot;
   );
 }
 
-function RulingCard({ ruling, snapshot, withdrawal }: { ruling: RulingRecord; snapshot: RunSnapshot; withdrawal: Act }) {
+function RulingCard({ ruling, snapshot, withdrawal }: { ruling: RulingRecord; snapshot: RunOutline; withdrawal: Act }) {
   const sceneNumbers = sceneNumbersById(snapshot.scenes);
   const entryNames = new Map(snapshot.entries.map((entry) => [entry.id, entry.name]));
   const { busy, act } = withdrawal;
@@ -95,7 +106,12 @@ function RulingCard({ ruling, snapshot, withdrawal }: { ruling: RulingRecord; sn
           label="Withdraw it" confirmLabel="Withdraw the ruling"
           explanation={lastingActInWords('withdraw-ruling', snapshot)}
           whyNot={whyAnActNeedsAScene(snapshot)} busy={busy}
-          onConfirm={() => void act('withdraw_ruling', { ruling: ruling.id })}
+          onConfirm={() => void act('withdraw_ruling', { ruling: ruling.id }, {
+            words: `Withdrew ruling ${ruling.number}. It is kept word for word under Show history.`,
+            link: { href: hashOfRoute({ page: 'run', slug: snapshot.run.slug, section: 'rulings', itemId: ruling.id }), words: 'Show it' },
+            // The ruling leaves the list in force, and its button with it.
+            focusTheNotice: true,
+          })}
         />
       )}
     </>
@@ -107,22 +123,26 @@ function RulingCard({ ruling, snapshot, withdrawal }: { ruling: RulingRecord; sn
  * instruction word for word: one act, written once (docs/decisions/0003). It names the entries a
  * ruling is about by name, so only open entries are offered.
  */
-function AddRulingForm({ snapshot, readAgain }: { snapshot: RunSnapshot; readAgain: () => void }) {
+function AddRulingForm({ snapshot, readAgain }: { snapshot: RunOutline; readAgain: () => void }) {
   const idPrefix = useId();
   const [form, setForm] = useState<RulingForm>(EMPTY_RULING_FORM);
-  const { actState, busy, act, refuse } = useAct(readAgain);
+  const { actState, busy, act, refuse, edited } = useAct(readAgain);
   const nameable = entriesARulingMayName(snapshot);
   const add = async () => {
     const toSend = rulingToSend(snapshot.run.slug, form, snapshot);
     if (!toSend.ok) return refuse(toSend.reason);
-    if (await act('record_ruling', toSend.input)) setForm(EMPTY_RULING_FORM);
+    const taken = await act('record_ruling', toSend.input, (answer) => ({
+      words: `Added ruling ${answer.number}.`,
+      link: { href: hashOfRoute({ page: 'run', slug: snapshot.run.slug, section: 'rulings', itemId: answer.id }), words: 'Show it' },
+    }));
+    if (taken) setForm(EMPTY_RULING_FORM);
   };
   const toggleAbout = (entryId: string, chosen: boolean) =>
     setForm({ ...form, aboutEntryIds: chosen ? [...form.aboutEntryIds, entryId] : form.aboutEntryIds.filter((id) => id !== entryId) });
   return (
     <details className="author-form">
       <summary>Add a ruling</summary>
-      <form className="stacked-form" onSubmit={(event) => { event.preventDefault(); void add(); }}>
+      <form className="stacked-form" onInput={edited} onSubmit={(event) => { event.preventDefault(); void add(); }}>
         <label htmlFor={`${idPrefix}-text`}>The ruling, word for word</label>
         <textarea id={`${idPrefix}-text`} rows={3} value={form.text} onChange={(event) => setForm({ ...form, text: event.target.value })} />
         <fieldset className="choice-row">
@@ -148,8 +168,8 @@ function AddRulingForm({ snapshot, readAgain }: { snapshot: RunSnapshot; readAga
             ))}
           </fieldset>
         )}
-        <button type="submit" disabled={busy}>Add the ruling</button>
-        <ActMessage actState={actState} doneWords="Added." />
+        <button type="submit" aria-disabled={busy || undefined}>Add the ruling</button>
+        <ActMessage actState={actState} />
       </form>
     </details>
   );

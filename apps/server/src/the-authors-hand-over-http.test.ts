@@ -10,7 +10,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import type { AnswerByOperation, OperationName, RunSnapshot } from '@timeweft/contract';
+import type { AnswerByOperation, OperationName, RunOutline } from '@timeweft/contract';
 import { briefingUri, personUri } from './attachments.ts';
 import { startServerForTests, type RunningServer } from './server-for-tests.ts';
 
@@ -37,7 +37,7 @@ async function refusalOf(name: OperationName, input: unknown): Promise<string> {
   return body.refusal ?? '';
 }
 
-async function wholeRun(slug: string): Promise<RunSnapshot> {
+async function wholeRun(slug: string): Promise<RunOutline> {
   return answerOf('read_run', { run: slug });
 }
 
@@ -46,7 +46,7 @@ async function briefingText(slug: string, upcoming: string[] = []): Promise<stri
 }
 
 /** A run with one scene at the mill, a miller, a ford and a sack of flour. */
-async function beginTheMill(slug: string, waypoints: string[] = []): Promise<RunSnapshot> {
+async function beginTheMill(slug: string, waypoints: string[] = []): Promise<RunOutline> {
   await answerOf('begin_run', { slug, title: 'The Mill', setting: 'A mill by a ford.', waypoints });
   await answerOf('save_scene', {
     run: slug, title: 'The wheel', when: 'the first morning', place: 'the ford',
@@ -61,7 +61,7 @@ async function beginTheMill(slug: string, waypoints: string[] = []): Promise<Run
   return wholeRun(slug);
 }
 
-function idOf(snapshot: RunSnapshot, name: string): string {
+function idOf(snapshot: RunOutline, name: string): string {
   const entry = snapshot.entries.find((candidate) => candidate.name === name);
   assert.ok(entry, `no entry called ${name}`);
   return entry.id;

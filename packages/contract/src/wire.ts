@@ -14,12 +14,15 @@
  * stays inside the budget asked for.
  *
  * Over MCP, a parameter sent as null is read as left out, at the top of a tool's input and inside
- * each item of a list: a client may offer null beside every optional parameter, and no parameter
- * here gives null a meaning. Over the web a null is refused, as any wrong value is.
+ * each item of a list: a client may offer null beside every optional parameter, and no story
+ * parameter gives null a meaning. Over the web a null is refused, as any wrong value is, except where
+ * an author's parameter says null means something (`edit_scene`'s `placeEntryId`: no place).
  */
-import type { Briefing, EntryLookup, EntryWritten, FoundItem, RunCounts, RunListing, SavedScene } from './answers.ts';
 import type {
-  CollisionRecord, EntryNoteRecord, EntryRecord, FactRecord, JourneyLegRecord, RulingRecord, RunRecord, RunSnapshot,
+  Briefing, EditedScene, EntryLookup, EntryWritten, FoundItem, RunCounts, RunListing, SavedScene, SceneSearchResult, SceneText,
+} from './answers.ts';
+import type {
+  CollisionRecord, EntryNoteRecord, EntryRecord, FactRecord, JourneyLegRecord, RulingRecord, RunOutline, RunRecord, RunSnapshot,
   SceneRecord, ThreadRecord, WaypointRecord,
 } from './records.ts';
 import type { RestoredRunReport, RunExportDocument } from './run-export.ts';
@@ -81,9 +84,12 @@ export interface AnswerByOperation {
   edit_entry: EntryWritten;
   rename_entry: EntryWritten;
   set_entry_visibility: EntryWritten;
+  edit_scene: EditedScene;
   list_collisions: CollisionRecord[];
   settle_collision: CollisionRecord;
-  read_run: RunSnapshot;
+  read_run: RunOutline;
+  read_scene_text: SceneText;
+  search_scenes: SceneSearchResult;
   import_run: ImportedRunReport;
   export_run: RunExportDocument;
   restore_run: RestoredRunReport;

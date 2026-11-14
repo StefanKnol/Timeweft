@@ -226,6 +226,20 @@ export interface EntryEditsTable {
   write_mark: WriteMark;
 }
 
+/** One change the author made to a field of a saved scene. */
+export interface SceneEditsTable {
+  id: string;
+  run_id: string;
+  scene_id: string;
+  field: string;
+  earlier_value: string;
+  later_value: string;
+  after_scene_id: string | null;
+  created_at: CreatedAt;
+  written_order: WrittenOrder;
+  write_mark: WriteMark;
+}
+
 export interface JourneyLegsTable {
   id: string;
   run_id: string;
@@ -276,6 +290,7 @@ export interface Database {
   waypoint_rewordings: WaypointRewordingsTable;
   run_edits: RunEditsTable;
   entry_edits: EntryEditsTable;
+  scene_edits: SceneEditsTable;
   journey_legs: JourneyLegsTable;
   collisions: CollisionsTable;
   timeweft_migrations: MigrationsTable;

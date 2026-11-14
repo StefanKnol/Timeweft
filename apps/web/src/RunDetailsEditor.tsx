@@ -1,8 +1,8 @@
-import { useEffect, useId, useState } from 'react';
+import { useId, useState } from 'react';
 import { RUN_STATUSES } from '@timeweft/contract';
-import type { RunSnapshot, RunStatus } from '@timeweft/contract';
-import { ActMessage, useAct, type Act } from './authoring.tsx';
-import { changedWhenInWords, runDetailsFormOf, runEditToSend, runHistoryInWords, type RunDetailsForm } from './shaping.ts';
+import type { RunOutline, RunStatus } from '@timeweft/contract';
+import { ActMessage, EditFold, useAct, type Act } from './authoring.tsx';
+import { changedWhenAndAtInWords, runDetailsFormOf, runEditToSend, runHistoryInWords, type RunDetailsForm } from './shaping.ts';
 
 const STATUS_WORDS: Record<RunStatus, string> = {
   binding: 'Binding: what it establishes is canon',
@@ -10,39 +10,26 @@ const STATUS_WORDS: Record<RunStatus, string> = {
 };
 
 /**
- * The run's own details, at the top of its page: a form to change the title, the setting, how it
+ * The run's own details, under "About this run": a form to change the title, the setting, how it
  * is narrated and its status, and the earlier values behind a "show history" control.
  */
-export function RunDetailsEditor({ snapshot, readAgain }: { snapshot: RunSnapshot; readAgain: () => void }) {
+export function RunDetailsEditor({ snapshot, readAgain }: { snapshot: RunOutline; readAgain: () => void }) {
   const history = runHistoryInWords(snapshot);
   const [showingHistory, setShowingHistory] = useState(false);
   const historyId = useId();
-  const { run } = snapshot;
   const action = useAct(readAgain);
-  // A refusal answers the press that made it and nothing after: it goes once the run is read
-  // again for any other act on the page, once another part of the run is opened, once the form is
-  // changed, and once the editor is closed.
-  const { actState, clear } = action;
-  const refused = actState.state === 'refused';
-  const [snapshotRefusedAt, setSnapshotRefusedAt] = useState<RunSnapshot | null>(null);
-  if (refused && snapshotRefusedAt === null) setSnapshotRefusedAt(snapshot);
-  if (!refused && snapshotRefusedAt !== null) setSnapshotRefusedAt(null);
-  useEffect(() => {
-    if (refused && snapshotRefusedAt !== null && snapshotRefusedAt !== snapshot) clear();
-  }, [refused, snapshotRefusedAt, snapshot, clear]);
-  useEffect(() => {
-    if (!refused) return undefined;
-    window.addEventListener('hashchange', clear);
-    return () => window.removeEventListener('hashchange', clear);
-  }, [refused, clear]);
   return (
     <>
-      <details className="author-form" onToggle={(event) => { if (!event.currentTarget.open && refused) clear(); }}>
-        <summary>Change the title, setting or narration</summary>
-        {/* Keyed by what the run holds, so after a save the form starts from the new values. */}
-        <RunDetailsFormFields key={JSON.stringify(runDetailsFormOf(run))} snapshot={snapshot} action={action} />
-        <ActMessage actState={action.actState} />
-      </details>
+      {/* The form is drawn while the fold is open, so each opening starts from what the run holds;
+          a refusal goes once the form is edited or the fold is closed. */}
+      <EditFold summary="Change the title, setting or narration" onClosed={action.edited}>
+        {(close) => (
+          <>
+            <RunDetailsFormFields snapshot={snapshot} action={action} onSaved={close} />
+            <ActMessage actState={action.actState} />
+          </>
+        )}
+      </EditFold>
       {history.length > 0 && (
         <>
           <p>
@@ -53,7 +40,7 @@ export function RunDetailsEditor({ snapshot, readAgain }: { snapshot: RunSnapsho
             <ol className="history-list" aria-label="Changes to the run, oldest first">
               {history.map((change, index) => (
                 <li key={index}>
-                  {change.label}, {changedWhenInWords(change.changedAfterSceneNumber)}: was {change.earlier}, became {change.later}
+                  {change.label}, {changedWhenAndAtInWords(change.changedAfterSceneNumber, change.writtenAt)}: was {change.earlier}, became {change.later}
                 </li>
               ))}
             </ol>
@@ -64,22 +51,19 @@ export function RunDetailsEditor({ snapshot, readAgain }: { snapshot: RunSnapsho
   );
 }
 
-function RunDetailsFormFields({ snapshot, action }: { snapshot: RunSnapshot; action: Act }) {
+function RunDetailsFormFields({ snapshot, action, onSaved }: { snapshot: RunOutline; action: Act; onSaved: () => void }) {
   const { run } = snapshot;
   const idPrefix = useId();
   const [form, setForm] = useState<RunDetailsForm>(runDetailsFormOf(run));
-  const { busy, act, refuse, clear, actState } = action;
-  const change = (next: RunDetailsForm) => {
-    if (actState.state === 'refused') clear();
-    setForm(next);
-  };
+  const { busy, act, refuse, edited } = action;
+  const change = (next: RunDetailsForm) => setForm(next);
   const save = async () => {
     const toSend = runEditToSend(run.slug, run, form);
     if (!toSend.ok) return refuse(toSend.reason);
-    await act('edit_run', toSend.input);
+    if (await act('edit_run', toSend.input, { words: "Saved the run's details. What they said before is kept under Show history." })) onSaved();
   };
   return (
-    <form className="stacked-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+    <form className="stacked-form" onInput={edited} onSubmit={(event) => { event.preventDefault(); void save(); }}>
       <p className="quiet field-hint">What it said before is kept, with when it changed.</p>
       <label htmlFor={`${idPrefix}-title`}>Title</label>
       <input id={`${idPrefix}-title`} value={form.title} onChange={(event) => change({ ...form, title: event.target.value })} />
@@ -96,7 +80,7 @@ function RunDetailsFormFields({ snapshot, action }: { snapshot: RunSnapshot; act
           </label>
         ))}
       </fieldset>
-      <button type="submit" disabled={busy}>Save the run's details</button>
+      <button type="submit" aria-disabled={busy || undefined}>Save the run's details</button>
     </form>
   );
 }

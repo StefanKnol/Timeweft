@@ -165,7 +165,7 @@ export const OPERATIONS = {
   redo_scene: operation({
     name: 'redo_scene',
     title: 'Redo a scene',
-    description: 'Replace a scene the author had redone. The earlier take is struck and kept, never served again, and what it established is taken back with it.',
+    description: 'Replace a scene the author had redone. The earlier take is struck and kept, never served again, and what it established is taken back with it. Where the author had edited the earlier take by hand, the answer says how many edits it carried; they stay with it.',
     effect: 'writes',
     audience: 'story',
     input: sceneInput.extend({ number: sceneNumber.describe('The number of the scene being redone.') }),
@@ -408,6 +408,26 @@ export const OPERATIONS = {
       visibility: z.enum(VISIBILITIES).describe('`open`: a story is told of it. `author-only`: only the author\'s pages show it.'),
     }),
   }),
+  edit_scene: operation({
+    name: 'edit_scene',
+    title: 'Edit a saved scene',
+    description:
+      "Change a standing take's title, summary, when, place, record, steer, what stood after it, or its star. Give only what changes. The scene keeps its id, and each earlier value is kept with when it changed; a story reads only the newest wording. Nothing the scene established (a fact, a note, a ruling, a thread, a journey leg) is changed. Refused where the run holds no scene with that id, where the take is struck, where nothing given differs, where the title, the summary, when it happens or where things stand after it is blank (only spaces count as blank), and where the place is not an entry of the run or was taken back by a redo. The answer is the scene as it now stands and the fields that changed.",
+    effect: 'writes',
+    audience: 'author',
+    input: z.object({
+      run: runHandle,
+      sceneId: z.string().min(1).describe('The id of the standing take, as read_run gives it.'),
+      title: z.string().optional().describe('The new title. Left out, it stays as it is. A blank title is refused.'),
+      summary: z.string().optional().describe('The new summary, two to four sentences. Left out, it stays as it is. A blank summary is refused, since every resume reads it.'),
+      whenTyped: z.string().optional().describe('When it happens, as the setting says it. Left out, it stays as it is. A blank one is refused.'),
+      placeEntryId: z.string().nullable().optional().describe('The id of the entry where it happens. Null to say it happens at no entry. Left out, it stays as it is.'),
+      record: z.string().optional().describe('The new record, the scene\'s prose, whole. Left out, it stays as it is.'),
+      steer: z.string().optional().describe('What the author directed at this scene, in their words. Left out, it stays as it is.'),
+      situationAfter: z.string().optional().describe('Where things stand once the scene is over. Left out, it stays as it is. A blank one is refused, since a resume reads the newest scene\'s as where things stand.'),
+      starred: z.boolean().optional().describe('True to star the scene, so a briefing ranks it higher; false to take the star off. Left out, it stays as it is.'),
+    }),
+  }),
   list_collisions: operation({
     name: 'list_collisions',
     title: 'List collisions',
@@ -454,10 +474,37 @@ export const OPERATIONS = {
   read_run: operation({
     name: 'read_run',
     title: 'Read a whole run',
-    description: 'Everything a run holds, author-only material included. For the author\'s own pages.',
+    description:
+      'Everything a run holds, author-only material included, with the scenes\' prose left out: each scene\'s record is given as its length in words, and a change the author made to a record is given as the length of each side in words, never the text. read_scene_text fetches one take\'s record, and search_scenes searches the records. For the author\'s own pages.',
     effect: 'reads',
     audience: 'author',
     input: z.object({ run: runHandle }),
+  }),
+  read_scene_text: operation({
+    name: 'read_scene_text',
+    title: "Read a scene's record",
+    description:
+      "The record (the prose) of one take of a scene, named by its id, struck takes included. Answers with the take's id, number and status beside it. Refused where the run holds no scene with that id. For the author's own pages.",
+    effect: 'reads',
+    audience: 'author',
+    input: z.object({
+      run: runHandle,
+      sceneId: z.string().min(1).describe('The id of the take, standing or struck, as read_run gives it.'),
+    }),
+  }),
+  search_scenes: operation({
+    name: 'search_scenes',
+    title: "Search the scenes' words",
+    description:
+      "Search every scene of a run for a word or phrase in its title, summary, record, steer and what stood after it. The text is matched as typed, case-blind but not accent-blind: a % or _ is an ordinary character. One match per take, in the first of those fields that holds it, with an excerpt around it; newest scene first. Struck takes are left out unless asked for; with them, a scene redone can match once for each take. The answer counts the matching takes and, apart, the scenes they belong to. For the author's own pages.",
+    effect: 'reads',
+    audience: 'author',
+    input: z.object({
+      run: runHandle,
+      text: z.string().min(2).describe('The word or phrase to look for, at least two characters.'),
+      includeStruck: z.boolean().default(false).describe('True to search the struck takes as well.'),
+      limit: z.number().int().min(1).max(200).default(50).describe('The most matches (takes) to answer with. The answer counts every match all the same.'),
+    }),
   }),
   export_run: operation({
     name: 'export_run',

@@ -116,6 +116,10 @@ export const RUN_TABLE_COLUMNS: { [Table in RunExportTableName]: ColumnsOf<Table
     id, run_id: theRun, entry_id: pointsInto('entries'), field: text, earlier_value: text, later_value: text,
     after_scene_id: sceneOrNone, created_at: writtenAt, written_order: bigWholeNumber, write_mark: bigWholeNumber,
   },
+  scene_edits: {
+    id, run_id: theRun, scene_id: pointsInto('scenes'), field: text, earlier_value: text, later_value: text,
+    after_scene_id: sceneOrNone, created_at: writtenAt, written_order: bigWholeNumber, write_mark: bigWholeNumber,
+  },
   journey_legs: {
     id, run_id: theRun, from_place: text, to_place: text, duration: text, note: text, scene_id: sceneOrNone,
     created_at: writtenAt, written_order: bigWholeNumber, write_mark: bigWholeNumber,
@@ -171,6 +175,7 @@ export const HOW_A_RUNS_ROWS_ARE_FOUND: Record<RunExportTableName, { from: strin
   waypoint_rewordings: { from: 'waypoint_rewordings', runIdIn: 'waypoint_rewordings.run_id', orderBy: 'waypoint_rewordings.written_order' },
   run_edits: { from: 'run_edits', runIdIn: 'run_edits.run_id', orderBy: 'run_edits.written_order' },
   entry_edits: { from: 'entry_edits', runIdIn: 'entry_edits.run_id', orderBy: 'entry_edits.written_order' },
+  scene_edits: { from: 'scene_edits', runIdIn: 'scene_edits.run_id', orderBy: 'scene_edits.written_order' },
   journey_legs: { from: 'journey_legs', runIdIn: 'journey_legs.run_id', orderBy: 'journey_legs.written_order' },
   collisions: { from: 'collisions', runIdIn: 'collisions.run_id', orderBy: 'collisions.written_order' },
 };

@@ -8,9 +8,9 @@
  * name.
  */
 import type {
-  AnswerByOperation, Briefing, ImportedRunReport, CollisionRecord, EntryLookup, EntryWritten, FactRecord, FoundItem, Id,
-  OperationName, RulingRecord, RunListing, RunRecord, RunSnapshot, SavedScene, SceneInFull, SceneRecord, SceneSummary,
-  ThreadRecord, WaypointRecord, RestoredRunReport, RunExportDocument, RunExportRowCounts, RunExportTableName,
+  EditedScene, AnswerByOperation, Briefing, ImportedRunReport, CollisionRecord, EntryLookup, EntryWritten, FactRecord, FoundItem, Id,
+  OperationName, RulingRecord, RunListing, RunOutline, RunRecord, RunSnapshot, SavedScene, SceneInFull, SceneRecord, SceneSummary,
+  SceneSearchResult, SceneText, ThreadRecord, WaypointRecord, RestoredRunReport, RunExportDocument, RunExportRowCounts, RunExportTableName,
 } from '@timeweft/contract';
 import { RUN_EXPORT_TABLE_IN_WORDS, RUN_EXPORT_TABLE_NAMES } from '@timeweft/contract';
 import { onOneLine } from '@timeweft/briefing';
@@ -64,7 +64,7 @@ export function runListingsInWords(listings: RunListing[]): string {
   }).join('\n');
 }
 
-export function runSnapshotInWords(snapshot: RunSnapshot): string {
+export function runSnapshotInWords(snapshot: RunSnapshot | RunOutline): string {
   const standing = snapshot.scenes.filter((scene) => scene.status === 'standing').length;
   const clocks = snapshot.clocks.map((clock) => `${clock.name}${clock.countsFrom === '' ? '' : ` (counts from ${clock.countsFrom})`}`);
   return [
@@ -73,6 +73,19 @@ export function runSnapshotInWords(snapshot: RunSnapshot): string {
     `Clocks: ${clocks.length === 0 ? 'none' : clocks.join('; ')}.`,
     `${plural(standing, 'standing scene', 'standing scenes')}, ${plural(snapshot.entries.length, 'entry', 'entries')}, ${plural(snapshot.facts.length, 'fact', 'facts')}, ${plural(snapshot.rulings.length, 'ruling', 'rulings')}, ${plural(snapshot.threads.length, 'thread', 'threads')}, ${plural(snapshot.waypoints.length, 'waypoint', 'waypoints')}.`,
   ].filter((line): line is string => line !== null).join('\n');
+}
+
+/** One take's record, under its number. Never said over MCP: the operation is the author's. */
+export function sceneTextInWords(text: SceneText): string {
+  return [`Scene ${text.number} (${text.status}), id ${text.sceneId}.`, text.record === '' ? 'No record beyond the summary.' : text.record].join('\n');
+}
+
+/** A search of the scenes' words, one line per match. Never said over MCP: the operation is the author's. */
+export function sceneSearchInWords(result: SceneSearchResult): string {
+  if (result.total === 0) return 'No scene holds that text.';
+  const lines = result.matches.map((match) => `- Scene ${match.number}${match.status === 'struck' ? ' (struck)' : ''}, "${match.title}", in its ${match.field}: ${match.excerpt}`);
+  const shown = result.matches.length === result.total ? `${plural(result.total, 'scene holds', 'scenes hold')} that text:` : `${result.total} scenes hold that text; the newest ${result.matches.length}:`;
+  return [shown, ...lines].join('\n');
 }
 
 /** A briefing is already written for a model, so it is served as it is. */
@@ -259,6 +272,19 @@ export function editedRunInWords(run: RunRecord): string {
   ].join('\n');
 }
 
+/** How each field of a scene is named when an edit is said in words. */
+const SCENE_FIELD_IN_WORDS: Record<EditedScene['fieldsChanged'][number], string> = {
+  title: 'the title', summary: 'the summary', whenTyped: 'when it happens', placeEntryId: 'the place',
+  record: 'the record', steer: 'the steer', situationAfter: 'what stood after it', starred: 'the star',
+};
+
+/** A scene the author edited: which take, and which fields changed. Never the words themselves. */
+export function editedSceneInWords(edited: EditedScene): string {
+  const fields = edited.fieldsChanged.map((field) => SCENE_FIELD_IN_WORDS[field]);
+  const listed = fields.length === 1 ? fields[0] : `${fields.slice(0, -1).join(', ')} and ${fields[fields.length - 1]}`;
+  return `Scene ${edited.scene.number}, "${edited.scene.title}", changed: ${listed}. What it said before is kept.`;
+}
+
 /** One thread after the author opened, touched or closed it. */
 export function threadInWords(verb: string, thread: ThreadRecord, names: NamesInTheRun): string {
   return `${verb}.\n${threadsInWords([thread], names)}`;
@@ -347,9 +373,12 @@ export const ANSWER_IN_WORDS: { [Name in OperationName]: (answer: AnswerByOperat
   edit_entry: (answer) => entryWrittenInWords('Changed; what it said before is kept.', answer),
   rename_entry: (answer) => entryWrittenInWords('Renamed; the old name is among its other names.', answer),
   set_entry_visibility: (answer) => entryWrittenInWords(answer.entry.visibility === 'open' ? 'Turned open:' : 'Turned author-only:', answer),
+  edit_scene: (answer) => editedSceneInWords(answer),
   list_collisions: (answer, names) => collisionsInWords(answer, names),
   settle_collision: (answer, names) => collisionInWords(answer, names),
   read_run: (answer) => runSnapshotInWords(answer),
+  read_scene_text: (answer) => sceneTextInWords(answer),
+  search_scenes: (answer) => sceneSearchInWords(answer),
   import_run: (answer) => importedRunInWords(answer),
   export_run: (answer) => exportedRunInWords(answer),
   restore_run: (answer) => restoredRunInWords(answer),

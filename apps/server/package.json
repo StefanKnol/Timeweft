@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node --experimental-strip-types src/main.ts",
     "import-run": "node --experimental-strip-types src/import-run-command.ts",
+    "seed-demo-run": "node --experimental-strip-types --no-warnings src/seed-demo-run-command.ts",
     "export-run": "node --experimental-strip-types --no-warnings src/backup-commands.ts export-run",
     "export-all": "node --experimental-strip-types --no-warnings src/backup-commands.ts export-all",
     "restore-run": "node --experimental-strip-types --no-warnings src/backup-commands.ts restore-run"

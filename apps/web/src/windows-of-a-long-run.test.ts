@@ -5,17 +5,17 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { RulingRecord, SceneRecord } from '@timeweft/contract';
+import type { RulingRecord, SceneOutline } from '@timeweft/contract';
 import {
   RULINGS_SHOWN_AT_A_TIME, SCENES_SHOWN_AT_A_TIME, newestShown, rulingsToDraw, scenesByNumber, shownAfterShowingOlder,
 } from './shaping.ts';
 
 // A made-up demo world: a ferry and its crossings.
 
-function scene(number: number): SceneRecord {
+function scene(number: number): SceneOutline {
   return {
     id: `scene-${number}`, runId: 'run', number, title: `Crossing ${number}`, starred: false, whenTyped: 'dawn',
-    placeEntryId: null, summary: 'The ferry crosses.', record: '', steer: '', situationAfter: '', status: 'standing',
+    placeEntryId: null, summary: 'The ferry crosses.', recordWords: 0, steer: '', situationAfter: '', status: 'standing',
     readings: [], createdAt: `2026-01-01T00:00:00.${String(number).padStart(3, '0')}Z`,
   };
 }

@@ -26,11 +26,20 @@ import type { Id, RunRecord } from './records.ts';
 /** The name every export document carries, so a file of another kind is refused by name. */
 export const RUN_EXPORT_FORMAT_NAME = 'timeweft-run-export';
 
-/** The version this store writes. Raised whenever a run table gains, loses or changes a column. */
-export const RUN_EXPORT_FORMAT_VERSION = 1;
+/**
+ * The version this store writes. Raised whenever a run table gains, loses or changes a column.
+ *
+ * - 1: the first.
+ * - 2: adds `scene_edits`, the author's changes to a saved scene. A version 1 document holds no such
+ *   list, and is read as holding none.
+ */
+export const RUN_EXPORT_FORMAT_VERSION = 2;
 
 /** Every version this store can restore. A version not here is refused with a sentence naming these. */
-export const RUN_EXPORT_FORMAT_VERSIONS_READ: readonly number[] = [1];
+export const RUN_EXPORT_FORMAT_VERSIONS_READ: readonly number[] = [1, 2];
+
+/** The tables a version 1 document does not carry, since they came after it. Each is read as empty. */
+export const TABLES_ADDED_AFTER_VERSION_1 = ['scene_edits'] as const;
 
 /** How a backup file's name ends. */
 export const RUN_EXPORT_FILE_ENDING = '.timeweft-run.json';
@@ -248,6 +257,19 @@ export interface EntryEditsRow {
   write_mark: BigIntegerText;
 }
 
+export interface SceneEditsRow {
+  id: Id;
+  run_id: Id;
+  scene_id: Id;
+  field: string;
+  earlier_value: string;
+  later_value: string;
+  after_scene_id: Id | null;
+  created_at: ExactTimestamp;
+  written_order: BigIntegerText;
+  write_mark: BigIntegerText;
+}
+
 export interface JourneyLegsRow {
   id: Id;
   run_id: Id;
@@ -300,6 +322,7 @@ export interface RunExportTables {
   waypoint_rewordings: WaypointRewordingsRow[];
   run_edits: RunEditsRow[];
   entry_edits: EntryEditsRow[];
+  scene_edits: SceneEditsRow[];
   journey_legs: JourneyLegsRow[];
   collisions: CollisionsRow[];
 }
@@ -313,7 +336,7 @@ export type RunExportTableName = keyof RunExportTables;
 export const RUN_EXPORT_TABLE_NAMES = [
   'runs', 'clocks', 'scenes', 'entries', 'scene_readings', 'facts', 'entry_notes', 'rulings',
   'ruling_about_entries', 'threads', 'thread_about_entries', 'thread_touches', 'waypoints',
-  'waypoint_rewordings', 'run_edits', 'entry_edits', 'journey_legs', 'collisions',
+  'waypoint_rewordings', 'run_edits', 'entry_edits', 'scene_edits', 'journey_legs', 'collisions',
 ] as const satisfies readonly RunExportTableName[];
 
 /**
@@ -337,6 +360,7 @@ export const RUN_EXPORT_TABLE_IN_WORDS: Record<RunExportTableName, string> = {
   waypoint_rewordings: 'Rewordings of waypoints',
   run_edits: 'Changes made to the run',
   entry_edits: 'Changes made to entries',
+  scene_edits: 'Changes made to saved scenes',
   journey_legs: 'Legs of journeys',
   collisions: 'Collisions',
 };
@@ -376,7 +400,7 @@ export interface RestoredRunReport {
  * never names a version the store does read as one it does not.
  */
 export function whyTheFormatVersionIsNotRead(version: unknown): string | null {
-  const read = `this server reads version ${RUN_EXPORT_FORMAT_VERSIONS_READ.join(', ')} only`;
+  const read = `this server reads ${versionsReadInWords()} only`;
   if (version === undefined || version === null) {
     return `This backup does not say which format version it is written in, and ${read}. The file may have been cut short or edited.`;
   }
@@ -387,6 +411,13 @@ export function whyTheFormatVersionIsNotRead(version: unknown): string | null {
   return `This backup is written in format version ${version}, and ${read}. Restore it with a server that reads that version, or take the backup again from where the run now lives.`;
 }
 
+/** The versions this store reads, as a sentence says them: "version 1", "versions 1 and 2". */
+function versionsReadInWords(): string {
+  const versions = RUN_EXPORT_FORMAT_VERSIONS_READ.map(String);
+  if (versions.length === 1) return `version ${versions[0]}`;
+  return `versions ${versions.slice(0, -1).join(', ')} and ${versions[versions.length - 1]}`;
+}
+
 /**
  * The text a backup file holds: the document as JSON with two spaces of indentation and a closing
  * line break. The server's backups, the commands and the page's download all write this one text,
@@ -394,6 +425,21 @@ export function whyTheFormatVersionIsNotRead(version: unknown): string | null {
  */
 export function runExportDocumentAsText(document: RunExportDocument): string {
   return `${JSON.stringify(document, null, 2)}\n`;
+}
+
+/**
+ * The tables of a version 1 backup, with an empty list for each table added after it. A version 1
+ * backup was taken before those tables existed and holds none of their rows; one that holds rows of
+ * such a table was not written by a server and is refused.
+ */
+export function tablesOfAVersion1Document<Tables extends Record<string, unknown>>(tables: Tables): Tables {
+  for (const table of TABLES_ADDED_AFTER_VERSION_1) {
+    const list = tables[table];
+    if (list !== undefined && !(Array.isArray(list) && list.length === 0)) {
+      throw new Refusal(`This backup says it is written in format version 1, which has no list for ${table}, and it holds one with rows in it, so it was not restored. The file may have been edited.`);
+    }
+  }
+  return { ...tables, ...Object.fromEntries(TABLES_ADDED_AFTER_VERSION_1.map((table) => [table, []])) };
 }
 
 /**
@@ -417,11 +463,14 @@ export function readRunExportDocument(value: unknown): RunExportDocument {
   if (!isRunSlug(document['runSlug'])) {
     throw new Refusal('This backup names its run by a slug no run may have (a slug is lower-case letters and digits joined by single hyphens), so it was not restored. The file may have been edited.');
   }
-  const tables = document['tables'];
-  if (typeof tables !== 'object' || tables === null || Array.isArray(tables)) {
+  const tablesAsWritten = document['tables'];
+  if (typeof tablesAsWritten !== 'object' || tablesAsWritten === null || Array.isArray(tablesAsWritten)) {
     throw new Refusal('This backup holds no tables, so it was not restored. The file may have been cut short or edited.');
   }
-  const missing = RUN_EXPORT_TABLE_NAMES.filter((name) => !Array.isArray((tables as Record<string, unknown>)[name]));
+  const tables = document['formatVersion'] === 1
+    ? tablesOfAVersion1Document(tablesAsWritten as Record<string, unknown>)
+    : tablesAsWritten as Record<string, unknown>;
+  const missing = RUN_EXPORT_TABLE_NAMES.filter((name) => !Array.isArray(tables[name]));
   if (missing.length > 0) {
     throw new Refusal(`This backup is missing ${missing.length === 1 ? 'the list' : 'the lists'} for ${missing.join(', ')}, so it was not restored. The file may have been cut short or edited.`);
   }
@@ -433,7 +482,7 @@ export function readRunExportDocument(value: unknown): RunExportDocument {
   if (typeof run === 'object' && run !== null && (run as Record<string, unknown>)['slug'] !== document['runSlug']) {
     throw new Refusal('This backup names its run by one slug on the outside and holds a run with another, so it was not restored. The file may have been edited.');
   }
-  return value as RunExportDocument;
+  return (tables === tablesAsWritten ? value : { ...document, tables }) as RunExportDocument;
 }
 
 /**

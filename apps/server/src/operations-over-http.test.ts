@@ -126,6 +126,14 @@ test('every operation runs end to end', async () => {
   ran.add('read_run');
   assert.equal(whole.scenes.filter((scene) => scene.status === 'struck').length, 1, 'the author sees the struck take');
   assert.equal(whole.collisions.length, 1);
+  const struckTake = whole.scenes.find((scene) => scene.status === 'struck')!;
+  const struckText = await answerOf('read_scene_text', { run: slug, sceneId: struckTake.id });
+  ran.add('read_scene_text');
+  assert.equal(struckText.status, 'struck');
+  assert.equal(struckText.number, struckTake.number);
+  const scenesHoldingTheTitle = await answerOf('search_scenes', { run: slug, text: struckTake.title, includeStruck: true });
+  ran.add('search_scenes');
+  assert.ok(scenesHoldingTheTitle.matches.some((match) => match.sceneId === struckTake.id), 'the struck take is found when struck takes are asked for');
 
   // The author's hand, each act once, on the run as it now stands: three standing scenes.
   const newestScene = whole.scenes.filter((scene) => scene.status === 'standing').at(-1)!;
@@ -189,6 +197,13 @@ test('every operation runs end to end', async () => {
   ran.add('set_entry_visibility');
   assert.equal(hidden.entry.visibility, 'author-only');
 
+  const editedScene = await answerOf('edit_scene', { run: slug, sceneId: firstScene.id, title: 'Flour at nightfall', starred: true, placeEntryId: null });
+  ran.add('edit_scene');
+  assert.equal(editedScene.scene.id, firstScene.id, 'an edited scene keeps its id');
+  assert.equal(editedScene.scene.title, 'Flour at nightfall');
+  assert.deepEqual(editedScene.fieldsChanged, ['title', 'placeEntryId', 'starred']);
+  assert.equal(editedScene.edits[0]!.earlierValue, 'Flour at dusk');
+
   const ended = await answerOf('end_fact', { fact: fact.id });
   ran.add('end_fact');
   assert.equal(ended.id, fact.id);
@@ -214,7 +229,7 @@ test('every operation runs end to end', async () => {
   ran.add('export_run');
   assert.equal(backup.runSlug, slug);
   assert.equal(backup.tables.collisions.length, 1);
-  assert.ok(backup.tables.run_edits.length > 0 && backup.tables.entry_edits.length > 0 && backup.tables.thread_touches.length > 0);
+  assert.ok(backup.tables.run_edits.length > 0 && backup.tables.entry_edits.length > 0 && backup.tables.scene_edits.length > 0 && backup.tables.thread_touches.length > 0);
 
   const restored = await answerOf('restore_run', { document: backup, replace: true });
   ran.add('restore_run');

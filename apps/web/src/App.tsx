@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { callOperationWithToken, readStoredAccessToken, storeAccessToken, type CallOperation } from './api.ts';
 import { CallOperationContext } from './calling.tsx';
-import { routeFromHash, type Route } from './shaping.ts';
+import { routeFromHash, titleOfRoute, type Route } from './shaping.ts';
 import { RunsPage } from './RunsPage.tsx';
-import { RunPage } from './RunPage.tsx';
+import { RunPage, SECTION_HEADING_ID } from './RunPage.tsx';
 
 export function App() {
   const [accessToken, setAccessToken] = useState<string | null>(readStoredAccessToken);
@@ -25,26 +25,26 @@ export function App() {
     };
   }, [accessToken, forgetToken]);
 
+  useEffect(() => {
+    // A run's page names itself once it has read the run; every other page is named here.
+    if (callOperation === null) document.title = 'Access token · Timeweft';
+    else if (route.page === 'runs') document.title = titleOfRoute(route, null);
+  }, [callOperation, route]);
+
+  const forgetTokenByHand = () => {
+    storeAccessToken(null);
+    setAccessToken(null);
+    setAccessNotice('');
+  };
+
   return (
     <>
+      <SkipLink onRunPage={callOperation !== null && route.page === 'run'} />
       <header className="masthead">
         <a className="masthead-name" href="#/runs">Timeweft</a>
-        <span className="masthead-note">First version of the reader</span>
-        {accessToken !== null && (
-          <button
-            type="button"
-            className="quiet-button"
-            onClick={() => {
-              storeAccessToken(null);
-              setAccessToken(null);
-              setAccessNotice('');
-            }}
-          >
-            Forget token
-          </button>
-        )}
+        {callOperation !== null && route.page === 'run' && <a className="masthead-link" href="#/runs">All runs</a>}
       </header>
-      <main className="page">
+      <main className="page" id={PAGE_CONTENT_ID} tabIndex={-1}>
         {callOperation === null ? (
           <AccessForm
             notice={accessNotice}
@@ -60,7 +60,36 @@ export function App() {
           </CallOperationContext.Provider>
         )}
       </main>
+      {accessToken !== null && (
+        <footer className="page-foot">
+          <button type="button" className="quiet-button" onClick={forgetTokenByHand}>Forget token</button>
+        </footer>
+      )}
     </>
+  );
+}
+
+const PAGE_CONTENT_ID = 'page-content';
+
+/**
+ * The first thing a keyboard reaches. The address after the `#` is the router's, so the link moves
+ * focus by hand rather than by pointing its address at an id.
+ */
+function SkipLink({ onRunPage }: { onRunPage: boolean }) {
+  return (
+    <a
+      className="skip-link"
+      href={`#${PAGE_CONTENT_ID}`}
+      onClick={(event) => {
+        event.preventDefault();
+        const target = document.getElementById(SECTION_HEADING_ID) ?? document.getElementById(PAGE_CONTENT_ID);
+        if (target === null) return;
+        target.focus({ preventScroll: true });
+        target.scrollIntoView({ block: 'start' });
+      }}
+    >
+      {onRunPage ? 'Skip to the section' : 'Skip to the page'}
+    </a>
   );
 }
 

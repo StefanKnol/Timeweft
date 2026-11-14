@@ -26,13 +26,19 @@ const CONTENT_TYPES: Record<string, string> = {
 export interface StaticFile {
   body: Buffer;
   contentType: string;
+  /** Where the file is on disk, so the server can keep its compressed bytes under that name. */
+  path: string;
+  /** When the file last changed, so a rebuilt file is never served from bytes kept for the old one. */
+  modifiedMilliseconds: number;
 }
 
-async function isFile(path: string): Promise<boolean> {
+/** When the file at `path` last changed, or null where nothing there is a file. */
+async function fileModifiedMilliseconds(path: string): Promise<number | null> {
   try {
-    return (await stat(path)).isFile();
+    const found = await stat(path);
+    return found.isFile() ? found.mtimeMs : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -52,7 +58,14 @@ export async function staticFileFor(root: string, requestPath: string): Promise<
   const wanted = resolve(rootFolder, `.${decoded.startsWith('/') ? decoded : `/${decoded}`}`);
   const inside = wanted === rootFolder || wanted.startsWith(rootFolder + sep);
   if (!inside) return null;
-  const path = inside && await isFile(wanted) ? wanted : resolve(rootFolder, 'index.html');
-  if (!await isFile(path)) return null;
-  return { body: await readFile(path), contentType: CONTENT_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream' };
+  const wantedModified = await fileModifiedMilliseconds(wanted);
+  const path = wantedModified !== null ? wanted : resolve(rootFolder, 'index.html');
+  const modifiedMilliseconds = wantedModified ?? await fileModifiedMilliseconds(path);
+  if (modifiedMilliseconds === null) return null;
+  return {
+    body: await readFile(path),
+    contentType: CONTENT_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream',
+    path,
+    modifiedMilliseconds,
+  };
 }

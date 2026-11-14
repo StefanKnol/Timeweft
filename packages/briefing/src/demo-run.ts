@@ -144,7 +144,7 @@ export function millerRun(): RunSnapshot {
       status: 'binding', continuesRunId: null, register: 'Plain past tense. Close third person on the miller.', createdAt: MOMENT,
     },
     clocks, scenes, entries, facts, notes, rulings, threads, waypoints, legs, collisions: [],
-    runEdits: [], entryEdits: [], waypointRewordings: [],
+    runEdits: [], entryEdits: [], waypointRewordings: [], sceneEdits: [],
   };
 }
 
@@ -295,7 +295,7 @@ export function generateRun(options: GeneratedRunOptions): RunSnapshot {
       status: random() < 0.5 ? 'binding' : 'telling', continuesRunId: null, register: paragraph(4), createdAt: MOMENT,
     },
     clocks, scenes, entries, facts, notes, rulings, threads, waypoints, legs, collisions: [],
-    runEdits: [], entryEdits: [], waypointRewordings: [],
+    runEdits: [], entryEdits: [], waypointRewordings: [], sceneEdits: [],
   };
   const newest = standing[standing.length - 1];
   switch (options.hugeField) {
@@ -427,6 +427,6 @@ export function generateLongRun(options: { seed: number; scenes: number }): RunS
       status: 'binding', continuesRunId: null, register: paragraph(4), createdAt: MOMENT,
     },
     clocks, scenes, entries, facts, notes, rulings, threads, waypoints: [], legs, collisions: [],
-    runEdits: [], entryEdits: [], waypointRewordings: [],
+    runEdits: [], entryEdits: [], waypointRewordings: [], sceneEdits: [],
   };
 }

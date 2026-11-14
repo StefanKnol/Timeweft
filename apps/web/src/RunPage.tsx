@@ -1,6 +1,7 @@
-import type { RunSnapshot } from '@timeweft/contract';
+import { useEffect, useLayoutEffect, useRef, type MutableRefObject } from 'react';
+import type { RunOutline } from '@timeweft/contract';
 import { LoadedMessage, useOperation } from './calling.tsx';
-import { hashOfRoute, RUN_SECTIONS, type Route, type RunSection } from './shaping.ts';
+import { hashOfRoute, RUN_SECTIONS, SECTION_TITLES, titleOfRoute, type Route } from './shaping.ts';
 import { ScenesSection } from './ScenesSection.tsx';
 import { EntriesSection } from './EntriesSection.tsx';
 import { RulingsSection } from './RulingsSection.tsx';
@@ -8,96 +9,159 @@ import { ThreadsSection } from './ThreadsSection.tsx';
 import { CollisionsSection } from './CollisionsSection.tsx';
 import { BriefingSection } from './BriefingSection.tsx';
 import { JourneysSection } from './JourneysSection.tsx';
-import { RunDetailsEditor } from './RunDetailsEditor.tsx';
-import { BackupDownload } from './BackupDownload.tsx';
-
-const SECTION_TITLES: Record<RunSection, string> = {
-  scenes: 'Scenes',
-  entries: 'People, places and things',
-  rulings: 'Rulings',
-  threads: 'Threads',
-  journeys: 'Waypoints and journeys',
-  collisions: 'Collisions',
-  briefing: 'The briefing',
-};
+import { RunSection } from './RunSection.tsx';
+import { NoticeProvider } from './NoticeArea.tsx';
 
 type RunRoute = Extract<Route, { page: 'run' }>;
 
+/** The id of the section's heading, which the "Skip to the section" link moves focus to. */
+export const SECTION_HEADING_ID = 'section-heading';
+
 export function RunPage({ route }: { route: RunRoute }) {
   const { loaded, readAgain } = useOperation('read_run', { run: route.slug });
+  const snapshot = loaded.state === 'answer' ? loaded.answer : null;
+  // Set by a press on a tab, read once the new section is drawn: a tab pressed scrolls to the
+  // section's heading, while the browser's own Back keeps the place it remembers.
+  const scrollToHeadingWhenDrawn = useRef(false);
+
+  useEffect(() => {
+    document.title = titleOfRoute(route, snapshot);
+  }, [route, snapshot]);
+
   return (
-    <article aria-labelledby="run-heading">
-      <p><a href="#/runs">All runs</a></p>
-      {loaded.state !== 'answer' ? (
-        <>
-          <h1 id="run-heading">{route.slug}</h1>
-          <LoadedMessage loaded={loaded} />
-        </>
-      ) : (
-        <>
-          <RunHeading snapshot={loaded.answer} readAgain={readAgain} />
-          <SectionTabs route={route} snapshot={loaded.answer} />
-          <SectionBody route={route} snapshot={loaded.answer} readAgain={readAgain} />
-        </>
-      )}
-    </article>
+    <NoticeProvider snapshot={snapshot}>
+      <article aria-labelledby="run-heading" className="run-page">
+        {snapshot === null ? (
+          <>
+            <h1 id="run-heading" className="run-title">{route.slug}</h1>
+            <LoadedMessage loaded={loaded} />
+          </>
+        ) : (
+          <>
+            <RunHeading snapshot={snapshot} />
+            <SectionTabs route={route} snapshot={snapshot} scrollToHeadingWhenDrawn={scrollToHeadingWhenDrawn} />
+            <SectionBody route={route} snapshot={snapshot} readAgain={readAgain} scrollToHeadingWhenDrawn={scrollToHeadingWhenDrawn} />
+          </>
+        )}
+      </article>
+    </NoticeProvider>
   );
 }
 
-function RunHeading({ snapshot, readAgain }: { snapshot: RunSnapshot; readAgain: () => void }) {
+/** One line: the run's title and a quiet mark for binding or a telling. The rest is under "About this run". */
+function RunHeading({ snapshot }: { snapshot: RunOutline }) {
   const { run } = snapshot;
+  const isBinding = run.status === 'binding';
   return (
-    <header>
-      <h1 id="run-heading">{run.title}</h1>
-      <p className="quiet"><code>{run.slug}</code> · {run.status === 'binding' ? 'binding: what it establishes is canon' : 'a telling: its facts stay in the run'}</p>
-      {run.setting !== '' && <p>{run.setting}</p>}
-      {snapshot.clocks.length > 0 && (
-        <p className="quiet">Clocks: {snapshot.clocks.map((clock) => `${clock.name}${clock.countsFrom === '' ? '' : ` (from ${clock.countsFrom})`}`).join('; ')}</p>
-      )}
-      {run.register !== '' && <p className="quiet">Narrated: {run.register}</p>}
-      <RunDetailsEditor snapshot={snapshot} readAgain={readAgain} />
-      <BackupDownload runSlug={run.slug} />
+    <header className="run-heading-line">
+      <h1 id="run-heading" className="run-title">{run.title}</h1>
+      <span
+        className="run-status-mark"
+        title={isBinding ? 'What it establishes is canon' : 'Its facts stay in the run'}
+      >
+        {isBinding ? 'binding' : 'a telling'}
+      </span>
     </header>
   );
 }
 
-function SectionTabs({ route, snapshot }: { route: RunRoute; snapshot: RunSnapshot }) {
+function SectionTabs({ route, snapshot, scrollToHeadingWhenDrawn }: {
+  route: RunRoute;
+  snapshot: RunOutline;
+  scrollToHeadingWhenDrawn: MutableRefObject<boolean>;
+}) {
   const waiting = snapshot.collisions.filter((collision) => collision.state === 'waiting').length;
+  const listReference = useRef<HTMLUListElement>(null);
+
+  // On a phone the row scrolls sideways; keep the current tab inside the row's own view without
+  // moving the page.
+  useLayoutEffect(() => {
+    const list = listReference.current;
+    const current = list?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (list === null || list === undefined || current === null || current === undefined) return;
+    const currentLeft = current.offsetLeft - list.offsetLeft;
+    const currentRight = currentLeft + current.offsetWidth;
+    if (currentLeft < list.scrollLeft) list.scrollLeft = Math.max(0, currentLeft - 16);
+    else if (currentRight > list.scrollLeft + list.clientWidth) list.scrollLeft = currentRight - list.clientWidth + 16;
+  }, [route.section]);
+
   return (
     <nav aria-label="Parts of the run" className="section-tabs">
-      <ul>
-        {RUN_SECTIONS.map((section) => (
-          <li key={section}>
-            <a
-              href={hashOfRoute({ page: 'run', slug: route.slug, section, itemId: null })}
-              aria-current={route.section === section ? 'page' : undefined}
-            >
-              {SECTION_TITLES[section]}
-              {section === 'collisions' && waiting > 0 && <span className="count-badge"> {waiting} waiting</span>}
-            </a>
-          </li>
-        ))}
+      <ul ref={listReference}>
+        {RUN_SECTIONS.map((section) => {
+          const href = hashOfRoute({ page: 'run', slug: route.slug, section, itemId: null });
+          return (
+            <li key={section}>
+              <a
+                href={href}
+                aria-current={route.section === section ? 'page' : undefined}
+                onClick={(event) => {
+                  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  if (window.location.hash === href) {
+                    // The same address fires no change, so scroll now.
+                    scrollHeadingIntoView();
+                    return;
+                  }
+                  scrollToHeadingWhenDrawn.current = true;
+                }}
+              >
+                {SECTION_TITLES[section]}
+                {section === 'collisions' && waiting > 0 && (
+                  <>
+                    {' '}
+                    <span className="count-badge" title={`${waiting} waiting for you`}>{waiting}</span>
+                    <span className="visually-hidden"> waiting</span>
+                  </>
+                )}
+              </a>
+            </li>
+          );
+        })}
       </ul>
     </nav>
   );
 }
 
-function SectionBody({ route, snapshot, readAgain }: { route: RunRoute; snapshot: RunSnapshot; readAgain: () => void }) {
-  const heading = <h2 className="section-heading">{SECTION_TITLES[route.section]}</h2>;
+/** Puts the section's heading just under the tabs, unless it is already in view below them. */
+function scrollHeadingIntoView() {
+  const heading = document.getElementById(SECTION_HEADING_ID);
+  if (heading === null) return;
+  const tabs = document.querySelector('.section-tabs');
+  const tabsBottom = tabs === null ? 0 : tabs.getBoundingClientRect().bottom;
+  const headingTop = heading.getBoundingClientRect().top;
+  if (headingTop >= tabsBottom && headingTop < window.innerHeight * 0.5) return;
+  heading.scrollIntoView({ block: 'start' });
+}
+
+function SectionBody({ route, snapshot, readAgain, scrollToHeadingWhenDrawn }: {
+  route: RunRoute;
+  snapshot: RunOutline;
+  readAgain: () => void;
+  scrollToHeadingWhenDrawn: MutableRefObject<boolean>;
+}) {
+  useLayoutEffect(() => {
+    if (!scrollToHeadingWhenDrawn.current) return;
+    scrollToHeadingWhenDrawn.current = false;
+    scrollHeadingIntoView();
+  }, [route.section, route.itemId, scrollToHeadingWhenDrawn]);
+
+  const heading = <h2 id={SECTION_HEADING_ID} tabIndex={-1} className="section-heading">{SECTION_TITLES[route.section]}</h2>;
   switch (route.section) {
     case 'scenes':
-      return <section>{heading}<ScenesSection snapshot={snapshot} selectedSceneId={route.itemId} /></section>;
+      return <section className={route.itemId === null ? 'section-wide' : 'section-prose'}>{heading}<ScenesSection snapshot={snapshot} selectedItemId={route.itemId} /></section>;
     case 'entries':
-      return <section>{heading}<EntriesSection snapshot={snapshot} openEntryId={route.itemId} readAgain={readAgain} /></section>;
+      return <section className="section-wide">{heading}<EntriesSection snapshot={snapshot} openEntryId={route.itemId} readAgain={readAgain} /></section>;
     case 'rulings':
-      return <section>{heading}<RulingsSection snapshot={snapshot} readAgain={readAgain} /></section>;
+      return <section className="section-wide">{heading}<RulingsSection snapshot={snapshot} shownItemId={route.itemId} readAgain={readAgain} /></section>;
     case 'threads':
-      return <section>{heading}<ThreadsSection snapshot={snapshot} readAgain={readAgain} /></section>;
+      return <section className="section-wide">{heading}<ThreadsSection snapshot={snapshot} shownItemId={route.itemId} readAgain={readAgain} /></section>;
     case 'journeys':
-      return <section>{heading}<JourneysSection snapshot={snapshot} readAgain={readAgain} /></section>;
+      return <section className="section-wide">{heading}<JourneysSection snapshot={snapshot} shownItemId={route.itemId} readAgain={readAgain} /></section>;
     case 'collisions':
-      return <section>{heading}<CollisionsSection snapshot={snapshot} readAgain={readAgain} /></section>;
+      return <section className="section-wide">{heading}<CollisionsSection snapshot={snapshot} shownItemId={route.itemId} readAgain={readAgain} /></section>;
     case 'briefing':
-      return <section>{heading}<BriefingSection runSlug={snapshot.run.slug} /></section>;
+      return <section className="section-wide">{heading}<BriefingSection runSlug={snapshot.run.slug} /></section>;
+    case 'run':
+      return <section className="section-prose">{heading}<RunSection snapshot={snapshot} readAgain={readAgain} /></section>;
   }
 }

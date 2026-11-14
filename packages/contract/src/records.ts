@@ -117,6 +117,61 @@ export interface SceneRecord {
   createdAt: string;
 }
 
+/**
+ * A scene as the author's run page reads it: everything but its record (the prose), with the
+ * record's length in words instead. A type of its own, so nothing reads an empty record as a scene
+ * that has none. `read_scene_text` fetches the record of one take.
+ */
+export interface SceneOutline extends Omit<SceneRecord, 'record'> {
+  /** How many words the record holds. 0 where it holds none. */
+  recordWords: number;
+}
+
+/**
+ * The parts of a saved scene the author may change from their pages. The scene keeps its id, since
+ * a chat, a fact and a journey leg may hold it. What it established (facts, notes, rulings, threads,
+ * legs) is never changed this way; those keep their own forms.
+ */
+export const SCENE_FIELDS_THE_AUTHOR_EDITS = ['title', 'summary', 'whenTyped', 'placeEntryId', 'record', 'steer', 'situationAfter', 'starred'] as const;
+export type SceneFieldTheAuthorEdits = (typeof SCENE_FIELDS_THE_AUTHOR_EDITS)[number];
+
+/**
+ * One change the author made to a field of a saved scene. The scene's row holds the newest value,
+ * and these rows hold every earlier one, oldest first. Both values are text: a place is its entry's
+ * id, or the empty string for no place; a star is `true` or `false`.
+ *
+ * Dated as `RunEditRecord` is: `afterSceneId` is the newest standing scene when the change was made,
+ * and a redo of that scene moves the date onto the new take. The edit itself stays with the take it
+ * was made to, `sceneId`, even when that take is later struck. Never served to a story: a story
+ * reads a scene's newest wording only.
+ */
+export interface SceneEditRecord {
+  id: Id;
+  runId: Id;
+  sceneId: Id;
+  field: SceneFieldTheAuthorEdits;
+  earlierValue: string;
+  laterValue: string;
+  afterSceneId: Id | null;
+  createdAt: string;
+}
+
+/**
+ * A change to a saved scene as the author's run page reads it. A change to any field but the record
+ * carries both values, as `SceneEditRecord` does. A change to the record (the prose) carries the
+ * length of each side in words instead, for the reason `SceneOutline` leaves the record out: the
+ * prose is most of a run, and both sides of every edit to it would travel on every load.
+ */
+export type SceneEditOutline =
+  | (SceneEditRecord & { field: Exclude<SceneFieldTheAuthorEdits, 'record'> })
+  | (Omit<SceneEditRecord, 'earlierValue' | 'laterValue'> & {
+    field: 'record';
+    /** How many words the record held before the change. */
+    earlierWords: number;
+    /** How many words it held after it. */
+    laterWords: number;
+  });
+
 export const ENTRY_KINDS = ['person', 'group', 'place', 'item', 'other'] as const;
 export type EntryKind = (typeof ENTRY_KINDS)[number];
 
@@ -382,4 +437,18 @@ export interface RunSnapshot {
   entryEdits: EntryEditRecord[];
   /** Every rewording of a waypoint, oldest first. Empty for a story, which reads the newest wording. */
   waypointRewordings: WaypointRewordingRecord[];
+  /** Every change the author made to a saved scene, oldest first. Empty for a story, which reads the newest wording. */
+  sceneEdits: SceneEditRecord[];
+}
+
+/**
+ * A whole run as the author's run page reads it: the snapshot with the scenes' prose left out, since
+ * the prose is most of a run and is read one scene at a time. The prose is left out twice over: each
+ * scene's record, and both sides of every change made to a record.
+ */
+export interface RunOutline extends Omit<RunSnapshot, 'scenes' | 'sceneEdits'> {
+  /** Every scene, struck ones included, by number and then by time written, without its record. */
+  scenes: SceneOutline[];
+  /** Every change the author made to a saved scene, oldest first, a change to a record given in words counted. */
+  sceneEdits: SceneEditOutline[];
 }
